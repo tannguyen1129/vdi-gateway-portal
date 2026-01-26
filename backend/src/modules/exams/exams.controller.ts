@@ -16,6 +16,13 @@ export class ExamsController {
   @Post()
   create(@Body() body: any) { return this.examsService.create(body); }
 
+  @Get(':id') // <--- QUAN TRỌNG: Định nghĩa route GET /exams/:id
+async findOne(@Param('id') id: string) {
+  const exam = await this.examsService.findOne(+id);
+  if (!exam) throw new HttpException('Kỳ thi không tồn tại', HttpStatus.NOT_FOUND);
+  return exam;
+}
+
   // 2. [QUAN TRỌNG] API SINH VIÊN JOIN VÀO KỲ THI
   @Post(':id/join')
   async joinExam(

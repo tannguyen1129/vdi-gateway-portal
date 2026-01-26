@@ -153,8 +153,8 @@ export default function ExamsPage() {
                             <td className="p-4 text-gray-600 text-sm max-w-xs">{exam.description || '-'}</td>
                             <td className="p-4 text-sm">
                                 {/* Hiển thị giờ VN chuẩn */}
-                                <p><span className="font-bold text-gray-500">Bắt đầu:</span> {exam.startTime ? new Date(exam.startTime).toLocaleString('vi-VN') : '---'}</p>
-                                <p><span className="font-bold text-gray-500">Kết thúc:</span> {exam.endTime ? new Date(exam.endTime).toLocaleString('vi-VN') : '---'}</p>
+                                <p><span className="font-bold text-gray-500">Bắt đầu:</span> {exam.startTime ? new Date(exam.startTime).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : '---'}</p>
+                                <p><span className="font-bold text-gray-500">Kết thúc:</span> {exam.endTime ? new Date(exam.endTime).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : '---'}</p>
                             </td>
                             <td className="p-4 text-center">
                                 <button 

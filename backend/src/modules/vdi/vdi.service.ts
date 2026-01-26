@@ -1,3 +1,4 @@
+// backend/src/modules/vdi/vdi.service.ts
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -11,29 +12,21 @@ export class VdiService {
     private vmRepo: Repository<Vm>,
   ) {}
 
-  // 1. Logic Cấp phát máy
   async allocateVm(userId: number): Promise<Vm> {
-    // Check xem user này đã có máy chưa
     let vm = await this.vmRepo.findOne({ where: { allocatedToUserId: userId } });
     if (vm) return vm;
 
-    // Tìm máy rảnh
     vm = await this.vmRepo.findOne({ where: { isAllocated: false } });
-    
-    if (!vm) {
-      throw new NotFoundException('Hệ thống hết máy ảo. Vui lòng liên hệ giám thị.');
-    }
+    if (!vm) throw new NotFoundException('Hệ thống hết máy ảo. Vui lòng liên hệ giám thị.');
 
-    // Khóa máy
     vm.isAllocated = true;
     vm.allocatedToUserId = userId;
     await this.vmRepo.save(vm);
     
-    console.log(`[VDI] Allocated ${vm.username} for UserID ${userId}`);
     return vm;
   }
 
-  // 2. Logic tạo Token (CẤU HÌNH LEGACY CHUẨN)
+  // --- HÀM TẠO TOKEN (CẤU HÌNH "SAFE MODE" - ỔN ĐỊNH CAO) ---
   generateGuacamoleToken(vm: Vm): string {
     const connectionSettings = {
       connection: {
@@ -44,34 +37,47 @@ export class VdiService {
           'username': vm.username,
           'password': vm.password,
           
-          // --- CẤU HÌNH LEGACY (NHẸ & ỔN ĐỊNH) ---
+          // 1. BẢO MẬT & MẠNG
           'security': 'nla',           
           'ignore-cert': 'true',
           
-          // TẮT HOÀN TOÀN GFX ĐỂ TRÁNH TREO BROWSER
-          'enable-gfx': 'false',       
-          'enable-video-streaming': 'false',
-          
-          // Tối ưu hóa hiển thị
-          'color-depth': '16',         
+          // 2. ĐỒ HỌA (Fix lỗi màn hình đen/disconnect)
+          'color-depth': '24',          // Windows mới bắt buộc 32-bit
           'resize-method': 'display-update',
           'force-lossless': 'false',   
-          
-          // Tắt các hiệu ứng rác
+          'enable-gfx': 'false',        // Tắt GFX để nhẹ trình duyệt
+          'enable-video-streaming': 'false',
+
+          // 3. TẮT TẤT CẢ TÍNH NĂNG PHỤ (Fix lỗi RDPDR Crash)
+          // Tắt Âm thanh
           'disable-audio': 'true',
+          'enable-audio-input': 'false',
+          'console-audio': 'false',
+          
+          // Tắt In ấn & Ổ đĩa (Nguyên nhân chính gây crash RDPDR)
+          'enable-printing': 'false',
+          'enable-drive': 'false',
+          'create-drive-path': 'false',
+          'disable-upload': 'true',
+          'disable-download': 'true',
+          
+          // Tắt Hiệu ứng Windows
           'enable-wallpaper': 'false',
           'enable-theming': 'false',
           'enable-font-smoothing': 'false',
           'enable-full-window-drag': 'false',
           'enable-menu-animations': 'false',
-          'enable-drive': 'false',
-          'create-drive-path': 'false',
+          'disable-bitmap-caching': 'false',
+          'disable-offscreen-caching': 'false',
+          
+          // Locale
+          'server-layout': 'en-us-qwerty',
           'dpi': '96'
         }
       }
     };
 
-    // Mã hóa token
+    // Mã hóa Token (Không đổi)
     const keyString = 'MySuperSecretKeyForEncryption123';
     const iv = crypto.randomBytes(16);
     const cipher = crypto.createCipheriv('aes-256-cbc', keyString, iv);
@@ -85,14 +91,12 @@ export class VdiService {
     })).toString('base64');
   }
 
-  // 3. Logic thu hồi máy
   async releaseVm(userId: number) {
     const vm = await this.vmRepo.findOne({ where: { allocatedToUserId: userId } });
     if (vm) {
       vm.isAllocated = false;
-      vm.allocatedToUserId = null; // Lỗi TypeScript đã được fix nhờ sửa Entity ở Bước 1
+      vm.allocatedToUserId = null;
       await this.vmRepo.save(vm);
-      console.log(`[VDI] Released ${vm.username}`);
     }
   }
 }

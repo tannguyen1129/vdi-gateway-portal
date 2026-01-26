@@ -12,11 +12,10 @@ export class AdminService {
     @InjectRepository(Vm) private vmRepo: Repository<Vm>,
   ) {}
 
-  // 1. IMPORT SINH VIÊN (Giữ nguyên logic của bạn - rất ổn)
+  // 1. IMPORT SINH VIÊN (Giữ nguyên - Code này ok)
   async importUsers(fileBuffer: Buffer) {
     const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const data = XLSX.utils.sheet_to_json(sheet);
     
     let countNew = 0;
@@ -30,20 +29,20 @@ export class AdminService {
 
       if (!mssv) continue;
 
-      let user = await this.userRepo.findOne({ where: { username: mssv.toString() } });
+      const user = await this.userRepo.findOne({ where: { username: mssv.toString().trim() } });
       
       if (user) {
-        user.password = matKhau.toString();
-        user.fullName = hoTen ? hoTen.toString() : user.fullName;
-        user.className = lop.toString();
+        user.password = matKhau.toString().trim();
+        if (hoTen) user.fullName = hoTen.toString().trim();
+        user.className = lop.toString().trim();
         await this.userRepo.save(user);
         countUpdate++;
       } else {
         await this.userRepo.save({
-          username: mssv.toString(),
-          password: matKhau.toString(),
-          fullName: hoTen ? hoTen.toString() : `Sinh viên ${mssv}`,
-          className: lop.toString(),
+          username: mssv.toString().trim(),
+          password: matKhau.toString().trim(),
+          fullName: hoTen ? hoTen.toString().trim() : `Sinh viên ${mssv}`,
+          className: lop.toString().trim(),
           role: UserRole.STUDENT
         });
         countNew++;
@@ -52,9 +51,11 @@ export class AdminService {
     return { message: `Xử lý xong: Thêm mới ${countNew}, Cập nhật ${countUpdate} sinh viên.` };
   }
 
-  // 2. IMPORT VM (Sửa lại logic: Map theo IP + Chống crash)
+  // ==================================================================
+  // 2. IMPORT VM (ĐÃ SỬA LỖI LOGIC PORT)
+  // ==================================================================
   async importVms(fileBuffer: Buffer) {
-    console.log("--> BẮT ĐẦU IMPORT VM (CHẾ ĐỘ MULTI-USER/IP)...");
+    console.log("--> BẮT ĐẦU IMPORT VM (THEO PORT)...");
     
     const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -68,34 +69,43 @@ export class AdminService {
         const row = data[i] as any;
         try {
             const ip = row['ip'] || row['IP'] || row['Ip Address'] || row['Host'];
-            const username = row['username'] || row['User'] || row['Username'];
-            const password = row['password'] || row['Pass'] || row['Mật khẩu'] || '123';
+            const port = row['port'] || row['Port']; // BẮT BUỘC PHẢI CÓ PORT
+            const username = row['username'] || row['User'] || row['Username'] || 'coder';
+            const password = row['password'] || row['Pass'] || row['Mật khẩu'] || 'techgen2024';
 
-            if (!ip || !username) continue;
+            // Nếu thiếu IP hoặc Port thì bỏ qua (Vì đây là 2 khóa chính để định danh)
+            if (!ip || !port) {
+                console.warn(`Dòng ${i}: Thiếu IP hoặc Port -> Bỏ qua`);
+                countError++;
+                continue;
+            }
 
             const ipString = ip.toString().trim();
+            const portNumber = Number(port); // Convert sang số
             const userString = username.toString().trim();
 
-            // SỬA LẠI: Tìm xem có cặp (IP + USERNAME) này chưa?
+            // SỬA LỖI Ở ĐÂY: Tìm theo IP và PORT (Chứ không tìm theo User nữa)
+            // Vì một User "coder" có thể nằm ở 100 port khác nhau
             const existingVm = await this.vmRepo.findOne({ 
                 where: { 
                     ip: ipString, 
-                    username: userString 
+                    port: portNumber 
                 } 
             });
 
             if (existingVm) {
-                // Có rồi -> Update pass
-                existingVm.password = password.toString();
+                // UPDATE: Cập nhật lại user/pass nếu file Excel thay đổi
+                existingVm.username = userString;
+                existingVm.password = password.toString().trim();
                 await this.vmRepo.save(existingVm);
                 countUpdate++;
             } else {
-                // Chưa có cặp này -> Tạo mới (Dù IP đã tồn tại ở dòng khác)
+                // CREATE: Tạo mới vì chưa có cặp IP:PORT này
                 await this.vmRepo.save({
                     ip: ipString,
-                    port: 3389,
+                    port: portNumber,
                     username: userString,
-                    password: password.toString(),
+                    password: password.toString().trim(),
                     isAllocated: false,
                     allocatedToUserId: null
                 });
@@ -106,27 +116,24 @@ export class AdminService {
             countError++;
         }
     }
-    return { message: `Xong! Mới: ${countNew}, Update: ${countUpdate}, Lỗi: ${countError}` };
+    return { message: `Import VM hoàn tất! Mới: ${countNew}, Cập nhật: ${countUpdate}, Lỗi: ${countError}` };
   }
 
-  // 3. LẤY DANH SÁCH (Giữ nguyên)
+  // 3. CÁC HÀM KHÁC (Giữ nguyên)
   async getAllStudents() {
-    return this.userRepo.find({ 
-        where: { role: UserRole.STUDENT },
-        order: { username: 'ASC' }
-    });
+    return this.userRepo.find({ where: { role: UserRole.STUDENT }, order: { username: 'ASC' } });
   }
 
   async getAllVms() {
-    return this.vmRepo.find({ order: { ip: 'ASC' } }); // Sắp xếp theo IP cho dễ nhìn
+    return this.vmRepo.find({ order: { ip: 'ASC', port: 'ASC' } }); // Sắp xếp theo Port tăng dần (31001, 31002...)
   }
 
-  // 4. CÁC HÀM CÒN THIẾU (Fix lỗi Controller đỏ lòm)
   async updateVm(id: number, data: Partial<Vm>) {
     const vm = await this.vmRepo.findOne({ where: { id } });
     if (!vm) throw new NotFoundException('Không tìm thấy máy ảo');
     
     if (data.ip) vm.ip = data.ip;
+    if (data.port) vm.port = data.port;
     if (data.username) vm.username = data.username;
     if (data.password) vm.password = data.password;
     

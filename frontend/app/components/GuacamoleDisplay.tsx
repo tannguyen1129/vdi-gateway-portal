@@ -1,158 +1,133 @@
 "use client";
-
 import React, { useEffect, useRef, useState } from 'react';
-import Script from 'next/script'; 
+// Import thư viện chuẩn từ NPM
+import Guacamole from 'guacamole-common-js';
 
-// Khai báo để TS không báo lỗi
-declare global {
-  interface Window {
-    Guacamole: any;
-  }
-}
-
-// Input nhận vào config thay vì token
 interface GuacamoleDisplayProps {
-    connectionConfig: {
-        ip: string;
-        username: string;
-        password: string;
-        port: number;
-        width?: number;
-        height?: number;
-    } | null;
+    token: string | null;
 }
 
-export default function GuacamoleDisplay({ connectionConfig }: GuacamoleDisplayProps) {
+export default function GuacamoleDisplay({ token }: GuacamoleDisplayProps) {
     const displayRef = useRef<HTMLDivElement>(null);
-    const clientRef = useRef<any>(null);
-    const tunnelRef = useRef<any>(null);
-    
-    const [status, setStatus] = useState("Loading Library...");
-    const [libLoaded, setLibLoaded] = useState(false);
+    const clientRef = useRef<any>(null); 
+    const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null); // Quản lý timeout kết nối lại
+    const [status, setStatus] = useState("Initializing...");
 
     useEffect(() => {
-        // Nếu chưa load thư viện hoặc chưa có config thì thôi
-        if (!libLoaded || !connectionConfig) return;
-        
-        if (typeof window.Guacamole === 'undefined') {
-             setStatus("Library Error. Retrying...");
-             return;
-        }
+        // Nếu chưa có token thì chưa chạy
+        if (!token) return;
 
-        const connectVDI = async () => {
+        // Hàm kết nối chính (Được gói lại để gọi đệ quy khi cần reconnect)
+        const connectVDI = () => {
+            // 1. Dọn dẹp kết nối cũ nếu có
+            if (clientRef.current) {
+                clientRef.current.disconnect();
+            }
+
             try {
-                setStatus("Connecting Gateway...");
+                setStatus("Connecting...");
 
-                // --- 1. TẠO TUNNEL ---
-                // Lưu ý: Port này phải khớp với Port chạy guacamole-lite (thường là 8080 hoặc 3000)
-                // Nếu backend NestJS chạy port 3000 và tích hợp guacd thì để 3000
-                const tunnel = new window.Guacamole.WebSocketTunnel(`ws://${window.location.hostname}:8080`); 
-                tunnelRef.current = tunnel;
-
-                // --- 2. TẠO CLIENT ---
-                const client = new window.Guacamole.Client(tunnel);
+                // 2. Tạo Tunnel WebSocket
+                const tunnel = new Guacamole.WebSocketTunnel(`ws://${window.location.hostname}:3000/guaclite`);
+                
+                const client = new Guacamole.Client(tunnel);
                 clientRef.current = client;
 
-                // Error Handling
-                client.onerror = (err: any) => {
-                    console.error("Client Error", err);
-                    setStatus(`Client Error: ${err.message || err.code || 'Unknown'}`);
+                // 3. Xử lý lỗi (Tự động thử lại sau 3s)
+                client.onerror = (e: any) => {
+                    console.error("Guac Client Error:", e);
+                    setStatus("Connection Error. Retrying in 3s...");
+                    
+                    // Xóa timeout cũ nếu có
+                    if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+                    // Đặt lịch kết nối lại
+                    reconnectTimeoutRef.current = setTimeout(connectVDI, 3000);
                 };
                 
-                tunnel.onerror = (err: any) => {
-                    console.error("Tunnel Error", err);
-                    // setStatus(`Tunnel Error: ${err.message || 'Connection Refused'}`);
-                };
-
-                tunnel.onstatechange = (state: number) => {
-                    // 0: CONNECTING, 1: OPEN, 2: CLOSING, 3: CLOSED
+                // 4. Lắng nghe trạng thái kết nối
+                tunnel.onstatechange = (s: number) => {
                     const states = ["CONNECTING", "CONNECTED", "CLOSING", "DISCONNECTED"];
-                    setStatus(states[state] || `Status ${state}`);
+                    setStatus(states[s] || `UNKNOWN (${s})`);
+
+                    // Nếu bị ngắt kết nối (State = 3) -> Tự động thử lại sau 2s
+                    if (s === 3) {
+                         console.warn("Disconnected form Server. Attempting reconnect...");
+                         if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+                         reconnectTimeoutRef.current = setTimeout(connectVDI, 2000);
+                    }
                 };
 
-                // Display
+                // 5. Gắn màn hình máy ảo vào thẻ DIV
                 const displayEl = client.getDisplay().getElement();
-                
-                // CSS Reset
-                displayEl.style.position = 'relative';
-                displayEl.style.width = '100%';
-                displayEl.style.height = '100%';
-                displayEl.style.zIndex = '100';
-                
                 if (displayRef.current) {
-                    displayRef.current.innerHTML = ''; 
+                    displayRef.current.innerHTML = ''; // Xóa màn hình cũ
                     displayRef.current.appendChild(displayEl);
                 }
 
-                // --- 3. KẾT NỐI (SỬA ĐOẠN NÀY) ---
-                // Thay vì gửi token, ta gửi params trực tiếp
-                const params = [
-                    `hostname=${connectionConfig.ip}`,
-                    `port=${connectionConfig.port || 3389}`,
-                    `username=${connectionConfig.username}`,
-                    `password=${connectionConfig.password}`,
-                    `width=${displayRef.current?.offsetWidth || window.innerWidth}`,
-                    `height=${displayRef.current?.offsetHeight || window.innerHeight}`,
-                    `ignore-cert=true`,
-                    `security=any`,
-                    `scheme=rdp` 
-                ];
-                
-                console.log("Connecting with params:", params.join('&')); // Debug xem params đúng chưa
-                client.connect(params.join('&'));
+                // 6. Gửi lệnh kết nối với Token
+                client.connect("token=" + token); 
 
-                // Mouse
-                const mouse = new window.Guacamole.Mouse(displayEl);
-                mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (mouseState: any) => {
-                    client.sendMouseState(mouseState);
+                // ==================================================
+                // XỬ LÝ SỰ KIỆN CHUỘT & BÀN PHÍM (Fix lỗi TypeScript)
+                // ==================================================
+                
+                // Ép kiểu 'as any' để tránh lỗi đỏ TS
+                const mouse = new Guacamole.Mouse(displayEl) as any;
+
+                // Chặn menu chuột phải của trình duyệt để trải nghiệm giống Native app
+                displayEl.oncontextmenu = (e: any) => { e.preventDefault(); return false; };
+
+                // Gửi sự kiện chuột
+                mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (s: any) => {
+                    // Chỉ gửi khi Client đang kết nối
+                    if (clientRef.current) clientRef.current.sendMouseState(s);
                 };
 
-                // Keyboard
-                const kbd = new window.Guacamole.Keyboard(document);
-                kbd.onkeydown = (k:any) => client.sendKeyEvent(1, k);
-                kbd.onkeyup = (k:any) => client.sendKeyEvent(0, k);
+                // Gửi sự kiện bàn phím (Gắn vào document để bắt phím toàn trang)
+                const kbd = new Guacamole.Keyboard(document) as any;
+                kbd.onkeydown = (k: any) => clientRef.current?.sendKeyEvent(1, k);
+                kbd.onkeyup = (k: any) => clientRef.current?.sendKeyEvent(0, k);
 
-                // Keep-Alive
-                const interval = setInterval(() => {
-                    if (tunnel.state === 1) tunnel.sendMessage("nop");
-                }, 5000);
-
-                return () => clearInterval(interval);
-
-            } catch (err: any) {
-                console.error(err);
-                setStatus("Fatal Error: " + err.message);
+            } catch (err: any) { 
+                console.error("Exception in connectVDI:", err);
+                setStatus("Client Exception. Retrying...");
+                reconnectTimeoutRef.current = setTimeout(connectVDI, 5000);
             }
         };
-
+        
+        // Gọi hàm kết nối lần đầu
         connectVDI();
 
-        return () => {
-            if (clientRef.current) clientRef.current.disconnect();
+        // Xử lý Resize cửa sổ
+        const handleResize = () => {
+            if (clientRef.current) {
+                clientRef.current.sendSize(window.innerWidth, window.innerHeight);
+            }
         };
+        window.addEventListener('resize', handleResize);
 
-    }, [connectionConfig, libLoaded]);
+        // CLEANUP (Chạy khi component bị hủy hoặc token thay đổi)
+        return () => { 
+            console.log("Cleaning up Guacamole connection...");
+            if(clientRef.current) {
+                clientRef.current.disconnect();
+            }
+            if (reconnectTimeoutRef.current) {
+                clearTimeout(reconnectTimeoutRef.current);
+            }
+            window.removeEventListener('resize', handleResize);
+        };
+    }, [token]);
 
     return (
         <div className="w-full h-full bg-black flex flex-col relative overflow-hidden">
-            {/* Load thư viện từ CDN */}
-            <Script 
-                src="https://unpkg.com/guacamole-common-js@1.3.0/dist/guacamole-common.js"
-                strategy="afterInteractive" 
-                onLoad={() => {
-                    console.log("Guacamole Lib Loaded!");
-                    setLibLoaded(true);
-                }}
-            />
-
-            {/* Thanh trạng thái DEBUG (Ẩn đi nếu muốn) */}
-            <div className="absolute top-0 w-full bg-blue-900/80 text-white text-xs p-1 z-50 flex justify-between px-4 font-mono pointer-events-none">
-                <span>STATUS: {status}</span>
-                <span>TARGET: {connectionConfig?.ip}</span>
+            {/* Thanh trạng thái nhỏ góc màn hình (Debug) */}
+            <div className={`absolute top-0 right-0 text-white text-xs p-2 z-50 backdrop-blur transition-opacity duration-500 ${status === 'CONNECTED' ? 'opacity-0 hover:opacity-100' : 'bg-blue-900/80'}`}>
+                STATUS: {status}
             </div>
             
-            {/* Màn hình VDI */}
-            <div ref={displayRef} className="w-full h-full bg-black flex items-center justify-center cursor-none" />
+            {/* Vùng hiển thị máy ảo */}
+            <div ref={displayRef} className="w-full h-full cursor-none outline-none" />
         </div>
     );
 }
