@@ -11,10 +11,4 @@ export class AuthController {
     if (!user) throw new UnauthorizedException('Tài khoản hoặc mật khẩu không đúng!');
     return user;
   }
-
-  // --- THÊM API NÀY ---
-  @Get('init-admin')
-  async initAdmin() {
-    return this.authService.createDefaultAdmin();
-  }
 }

@@ -38,11 +38,11 @@ export class VdiService {
           'password': vm.password,
           
           // 1. BẢO MẬT & MẠNG
-          'security': 'nla',           
+          'security': 'rdp',       
           'ignore-cert': 'true',
           
           // 2. ĐỒ HỌA (Fix lỗi màn hình đen/disconnect)
-          'color-depth': '24',          // Windows mới bắt buộc 32-bit
+          'color-depth': '32',          // Windows mới bắt buộc 32-bit
           'resize-method': 'display-update',
           'force-lossless': 'false',   
           'enable-gfx': 'false',        // Tắt GFX để nhẹ trình duyệt

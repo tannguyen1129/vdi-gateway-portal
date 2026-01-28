@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from 'react';
-import api from './../../utils/axios'; // Nhớ trỏ đúng file axios
+import api from './../../utils/axios';
 
 export default function VmsPage() {
   const [vms, setVms] = useState<any[]>([]);
@@ -41,29 +41,30 @@ export default function VmsPage() {
   };
 
   // 3. Xóa VM
-  const handleDelete = async (id: number, ip: string) => {
-    if (!confirm(`Bạn chắc chắn muốn xóa máy ${ip}?`)) return;
+  const handleDelete = async (id: number, ip: string, port: number) => {
+    if (!confirm(`Bạn chắc chắn muốn xóa máy ${ip}:${port}?`)) return;
     try {
       await api.delete(`/admin/vms/${id}`);
       alert("Đã xóa thành công!");
-      fetchVms(); // Refresh lại bảng
+      fetchVms(); 
     } catch (err) {
       alert("Lỗi khi xóa!");
     }
   };
 
-  // 4. Update VM
+  // 4. Update VM (ĐÃ SỬA: Thêm cập nhật Port)
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingVm) return;
     try {
       await api.put(`/admin/vms/${editingVm.id}`, {
         ip: editingVm.ip,
+        port: parseInt(editingVm.port), // Convert sang số
         username: editingVm.username,
-        // password: editingVm.password // (Mở comment nếu muốn cho sửa pass)
+        // password: editingVm.password 
       });
       alert("Cập nhật thành công!");
-      setEditingVm(null); // Tắt modal
+      setEditingVm(null); 
       fetchVms();
     } catch (err) {
       alert("Lỗi cập nhật!");
@@ -77,7 +78,7 @@ export default function VmsPage() {
 
         {/* --- KHUNG IMPORT --- */}
         <div className="bg-white p-6 rounded-lg shadow mb-8">
-            <h2 className="font-bold mb-4 text-green-800">📤 Nạp danh sách IP (Ghi đè nếu trùng)</h2>
+            <h2 className="font-bold mb-4 text-green-800">📤 Nạp danh sách máy (Excel: IP, Port, User, Pass)</h2>
             <div className="flex gap-4 items-center">
                 <input type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} className="border p-2 rounded" />
                 <button onClick={handleImport} disabled={loading} className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded font-bold">
@@ -94,6 +95,7 @@ export default function VmsPage() {
                     <tr>
                         <th className="p-4">ID</th>
                         <th className="p-4">IP Address</th>
+                        <th className="p-4">Port</th> {/* THÊM CỘT PORT */}
                         <th className="p-4">Username</th>
                         <th className="p-4">Trạng thái</th>
                         <th className="p-4 text-center">Hành động</th>
@@ -104,11 +106,12 @@ export default function VmsPage() {
                         <tr key={vm.id} className="border-b hover:bg-gray-50">
                             <td className="p-4 text-gray-500">#{vm.id}</td>
                             <td className="p-4 font-mono font-bold text-blue-600">{vm.ip}</td>
+                            <td className="p-4 font-mono font-bold text-purple-600">{vm.port}</td> {/* HIỂN THỊ PORT */}
                             <td className="p-4">{vm.username}</td>
                             <td className="p-4">
                                 {vm.isAllocated ? 
-                                    <span className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs">Đang dùng</span> : 
-                                    <span className="bg-green-100 text-green-600 px-2 py-1 rounded text-xs">Sẵn sàng</span>
+                                    <span className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold">Đang dùng ({vm.allocatedToUserId})</span> : 
+                                    <span className="bg-green-100 text-green-600 px-2 py-1 rounded text-xs font-bold">Sẵn sàng</span>
                                 }
                             </td>
                             <td className="p-4 flex justify-center gap-2">
@@ -119,7 +122,7 @@ export default function VmsPage() {
                                     ✏️ Sửa
                                 </button>
                                 <button 
-                                    onClick={() => handleDelete(vm.id, vm.ip)}
+                                    onClick={() => handleDelete(vm.id, vm.ip, vm.port)}
                                     className="bg-red-500 text-white px-3 py-1 rounded text-sm hover:bg-red-600"
                                 >
                                     🗑️ Xóa
@@ -132,9 +135,9 @@ export default function VmsPage() {
         </div>
       </div>
 
-      {/* --- MODAL EDIT (Chỉ hiện khi editingVm != null) --- */}
+      {/* --- MODAL EDIT --- */}
       {editingVm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-xl">
                 <h3 className="text-xl font-bold mb-4">Chỉnh sửa máy ảo</h3>
                 <form onSubmit={handleUpdate} className="space-y-4">
@@ -144,6 +147,15 @@ export default function VmsPage() {
                             type="text" 
                             value={editingVm.ip}
                             onChange={(e) => setEditingVm({...editingVm, ip: e.target.value})}
+                            className="w-full border p-2 rounded mt-1"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700">Port (RDP)</label>
+                        <input 
+                            type="number" 
+                            value={editingVm.port}
+                            onChange={(e) => setEditingVm({...editingVm, port: e.target.value})}
                             className="w-full border p-2 rounded mt-1"
                         />
                     </div>
