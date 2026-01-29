@@ -1,4 +1,3 @@
-// backend/src/modules/vdi/vdi.service.ts
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -16,7 +15,12 @@ export class VdiService {
     let vm = await this.vmRepo.findOne({ where: { allocatedToUserId: userId } });
     if (vm) return vm;
 
-    vm = await this.vmRepo.findOne({ where: { isAllocated: false } });
+    // Tìm máy chưa cấp phát (Ưu tiên máy có Port nhỏ nhất để gọn)
+    vm = await this.vmRepo.findOne({ 
+        where: { isAllocated: false },
+        order: { port: 'ASC' }
+    });
+    
     if (!vm) throw new NotFoundException('Hệ thống hết máy ảo. Vui lòng liên hệ giám thị.');
 
     vm.isAllocated = true;
@@ -26,58 +30,31 @@ export class VdiService {
     return vm;
   }
 
-  // --- HÀM TẠO TOKEN (CẤU HÌNH "SAFE MODE" - ỔN ĐỊNH CAO) ---
+  // --- HÀM TẠO TOKEN (PHIÊN BẢN VNC - NO PASSWORD) ---
   generateGuacamoleToken(vm: Vm): string {
     const connectionSettings = {
       connection: {
-        type: 'rdp',
+        // [QUAN TRỌNG 1] Đổi giao thức sang VNC
+        type: 'vnc', 
         settings: {
-          'hostname': vm.ip,
-          'port': vm.port.toString(),
-          'username': vm.username,
-          'password': vm.password,
+          // [QUAN TRỌNG 2] Thông số kết nối cơ bản
+          'hostname': vm.ip,       // IP Host (ví dụ 172.17.0.1)
+          'port': vm.port.toString(), // Port map ra ngoài (ví dụ 31001)
           
-          // 1. BẢO MẬT & MẠNG
-          'security': 'rdp',       
-          'ignore-cert': 'true',
+          // [QUAN TRỌNG 3] Cấu hình không mật khẩu (Khớp với -SecurityTypes None)
+          // Không cần điền username/password ở đây vì VNC này không set pass.
           
-          // 2. ĐỒ HỌA (Fix lỗi màn hình đen/disconnect)
-          'color-depth': '32',          // Windows mới bắt buộc 32-bit
-          'resize-method': 'display-update',
-          'force-lossless': 'false',   
-          'enable-gfx': 'false',        // Tắt GFX để nhẹ trình duyệt
-          'enable-video-streaming': 'false',
-
-          // 3. TẮT TẤT CẢ TÍNH NĂNG PHỤ (Fix lỗi RDPDR Crash)
-          // Tắt Âm thanh
-          'disable-audio': 'true',
-          'enable-audio-input': 'false',
-          'console-audio': 'false',
-          
-          // Tắt In ấn & Ổ đĩa (Nguyên nhân chính gây crash RDPDR)
-          'enable-printing': 'false',
-          'enable-drive': 'false',
-          'create-drive-path': 'false',
-          'disable-upload': 'true',
-          'disable-download': 'true',
-          
-          // Tắt Hiệu ứng Windows
-          'enable-wallpaper': 'false',
-          'enable-theming': 'false',
-          'enable-font-smoothing': 'false',
-          'enable-full-window-drag': 'false',
-          'enable-menu-animations': 'false',
-          'disable-bitmap-caching': 'false',
-          'disable-offscreen-caching': 'false',
-          
-          // Locale
-          'server-layout': 'en-us-qwerty',
-          'dpi': '96'
+          // Cấu hình hiển thị tối ưu cho Web
+          'cursor': 'remote',       // Dùng con trỏ chuột của server để đỡ lag
+          'color-depth': '24',      // Màu sắc chuẩn đẹp (True Color)
+          'swap-red-blue': 'false', // Sửa lỗi màu xanh/đỏ nếu bị ngược
+          'read-only': 'false',     // Cho phép điều khiển chuột/phím
+          'ignore-cert': 'true',    // Bỏ qua check SSL (dư thừa với VNC nhưng cứ để cho chắc)
         }
       }
     };
 
-    // Mã hóa Token (Không đổi)
+    // Mã hóa Token (Giữ nguyên logic cũ)
     const keyString = 'MySuperSecretKeyForEncryption123';
     const iv = crypto.randomBytes(16);
     const cipher = crypto.createCipheriv('aes-256-cbc', keyString, iv);
