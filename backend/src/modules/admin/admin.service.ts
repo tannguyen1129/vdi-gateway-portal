@@ -89,7 +89,8 @@ export class AdminService {
             const existingVm = await this.vmRepo.findOne({ 
                 where: { 
                     ip: ipString, 
-                    port: portNumber 
+                    port: portNumber,
+                    username: userString
                 } 
             });
 

@@ -1,7 +1,6 @@
 version: '3.8'
 
 services:
-  # 1. Guacamole Proxy Daemon
   guacd:
     image: guacamole/guacd
     container_name: umt_guacd
@@ -12,11 +11,14 @@ services:
       - "4822"
     networks:
       - vdi_net
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+    # [THÊM DÒNG NÀY] Tối ưu Java Heap và Buffer cho guacd
+    environment:
+      - GUACD_LOG_LEVEL=debug 
+      # Nếu guacd bị kill do thiếu RAM, dòng này giúp nó sống sót
+    deploy:
+      resources:
+        limits:
+          memory: 1G  # Cấp hẳn 1GB Ram cho nó xử lý ảnh
 
   # 2. Database (PostgreSQL)
   postgres:
@@ -26,7 +28,6 @@ services:
     env_file:
       - .env
     environment:
-      # SỬA LẠI: Dùng biến môi trường thay vì điền cứng
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
@@ -42,8 +43,8 @@ services:
     build: ./backend
     container_name: umt_backend
     restart: always
-    env_file:             # <--- ĐÂY LÀ DÒNG BẠN THIẾU
-      - .env              # <--- Backend cần file này để biết Pass DB
+    env_file:
+      - .env
     ports:
       - "3000:3000"
     depends_on:
@@ -66,6 +67,11 @@ services:
     networks:
       - vdi_net
 
+# --- CẤU HÌNH MẠNG (FIX LỖI DISCONNECT) ---
 networks:
   vdi_net:
     driver: bridge
+    driver_opts:
+      # Quan trọng: Giảm MTU xuống 1350 để gói tin RDP lớn
+      # không bị Docker drop (nguyên nhân gây màn hình đen/disconnect)
+      com.docker.network.driver.mtu: "1350"

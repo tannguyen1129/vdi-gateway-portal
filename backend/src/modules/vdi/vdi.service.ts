@@ -34,22 +34,43 @@ export class VdiService {
   generateGuacamoleToken(vm: Vm): string {
     const connectionSettings = {
       connection: {
-        // [QUAN TRỌNG 1] Đổi giao thức sang VNC
-        type: 'vnc', 
+        type: 'rdp',
         settings: {
-          // [QUAN TRỌNG 2] Thông số kết nối cơ bản
-          'hostname': vm.ip,       // IP Host (ví dụ 172.17.0.1)
-          'port': vm.port.toString(), // Port map ra ngoài (ví dụ 31001)
+          'hostname': vm.ip,
+          'port': vm.port.toString(),
+          'username': vm.username,
+          'password': vm.password,
+
+          // 1. Bảo mật & Kết nối
+          'security': 'nla',      
+          'ignore-cert': 'true',
+
+          // 2. [CẤU HÌNH FIX MÀN HÌNH ĐEN GFX]
+          'enable-gfx': 'true',     // Vẫn bật GFX (để Server không chặn)
+          'color-depth': '32',      
           
-          // [QUAN TRỌNG 3] Cấu hình không mật khẩu (Khớp với -SecurityTypes None)
-          // Không cần điền username/password ở đây vì VNC này không set pass.
-          
-          // Cấu hình hiển thị tối ưu cho Web
-          'cursor': 'remote',       // Dùng con trỏ chuột của server để đỡ lag
-          'color-depth': '24',      // Màu sắc chuẩn đẹp (True Color)
-          'swap-red-blue': 'false', // Sửa lỗi màu xanh/đỏ nếu bị ngược
-          'read-only': 'false',     // Cho phép điều khiển chuột/phím
-          'ignore-cert': 'true',    // Bỏ qua check SSL (dư thừa với VNC nhưng cứ để cho chắc)
+          // [QUAN TRỌNG] Tắt nén Video H.264 - Nguyên nhân gây màn hình đen
+          // Bắt buộc Server gửi ảnh tĩnh (dễ xử lý hơn video)
+          'disable-gfx-h264': 'true',  
+          'disable-gfx-avc444': 'true',
+
+          // 3. Tối ưu đường truyền
+          // Cho phép resize tự động (vì giờ đã tắt video nặng, resize sẽ an toàn hơn)
+          // Nhưng để an toàn nhất lúc này, ta vẫn KHÓA CỨNG
+          'width': '1024',
+          'height': '768',
+          'dpi': '96',
+          // Xóa dòng 'resize-method' để mặc định là None
+
+          // 4. Các setting cũ (giữ nguyên)
+          'disable-audio': 'true',
+          'enable-drive': 'false',
+          'enable-printing': 'false',
+          'disable-wallpaper': 'true', 
+          'disable-theming': 'true',
+          'enable-font-smoothing': 'false',
+
+          'server-layout': 'en-us-qwerty',
         }
       }
     };
