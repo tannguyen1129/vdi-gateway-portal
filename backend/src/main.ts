@@ -1,3 +1,5 @@
+// backend/src/main.ts
+
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Server } from 'socket.io';
@@ -7,8 +9,6 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.setGlobalPrefix('api');
-  
-  // Cấu hình CORS chặt chẽ hơn (Optional) hoặc giữ mặc định
   app.enableCors({
     origin: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
@@ -16,20 +16,18 @@ async function bootstrap() {
   });
 
   const server = app.getHttpServer();
-  
-  // Lắng nghe port 3000
   await app.listen(3000);
 
-  // Cấu hình Socket.io thủ công để tăng buffer size (quan trọng cho RDP)
+  // Socket.io config (Không ảnh hưởng trực tiếp đến Guacamole nhưng cứ giữ nguyên)
   const io = new Server(server, { 
     cors: { origin: '*' },
     pingTimeout: 60000,
     pingInterval: 25000,
-    maxHttpBufferSize: 1e8 // 100MB
+    maxHttpBufferSize: 1e8 
   });
 
   const guacdOptions = {
-    host: 'umt_guacd', // Tên service trong Docker Compose
+    host: 'umt_guacd',
     port: 4822,
   };
 
@@ -40,11 +38,13 @@ async function bootstrap() {
     },
     log: {
         level: 'ERR'
-    }
+    },
+    // [QUAN TRỌNG - BẮT BUỘC PHẢI CÓ DÒNG NÀY ĐỂ FIX DISCONNECT]
+    // Tăng thời gian chờ từ 10s (mặc định) lên 30s
+    maxInactivityTime: 30000 
   };
 
-  // Khởi tạo GuacamoleLite với đúng 3 tham số
-  // @ts-ignore: Bỏ qua check type vì thư viện này cũ chưa có @types chuẩn
+  // @ts-ignore
   new GuacamoleLite(
     { server, path: '/guaclite' }, 
     guacdOptions, 

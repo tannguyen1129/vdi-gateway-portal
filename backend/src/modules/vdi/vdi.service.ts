@@ -41,35 +41,32 @@ export class VdiService {
           'username': vm.username,
           'password': vm.password,
 
-          // 1. Bảo mật & Kết nối
+          // 1. Bảo mật
           'security': 'nla',      
           'ignore-cert': 'true',
+          // [FIX] Tăng timeout kết nối RDP với Windows
+          'timeout': '60', 
 
-          // 2. [CẤU HÌNH FIX MÀN HÌNH ĐEN GFX]
-          'enable-gfx': 'true',     // Vẫn bật GFX (để Server không chặn)
+          // 2. Fix màn hình đen
+          'enable-gfx': 'true',    
           'color-depth': '32',      
-          
-          // [QUAN TRỌNG] Tắt nén Video H.264 - Nguyên nhân gây màn hình đen
-          // Bắt buộc Server gửi ảnh tĩnh (dễ xử lý hơn video)
           'disable-gfx-h264': 'true',  
           'disable-gfx-avc444': 'true',
 
-          // 3. Tối ưu đường truyền
-          // Cho phép resize tự động (vì giờ đã tắt video nặng, resize sẽ an toàn hơn)
-          // Nhưng để an toàn nhất lúc này, ta vẫn KHÓA CỨNG
-          'width': '1024',
-          'height': '768',
+          // 3. Cấu hình Resize
+          'resize-method': 'display-update', // Bắt buộc cho auto-resize
           'dpi': '96',
-          // Xóa dòng 'resize-method' để mặc định là None
+          
+          // [QUAN TRỌNG] Đã XÓA 'width' và 'height' cứng ở đây.
+          // Để trình duyệt tự gửi kích thước lên.
 
-          // 4. Các setting cũ (giữ nguyên)
+          // 4. Các setting khác
           'disable-audio': 'true',
           'enable-drive': 'false',
           'enable-printing': 'false',
           'disable-wallpaper': 'true', 
           'disable-theming': 'true',
           'enable-font-smoothing': 'false',
-
           'server-layout': 'en-us-qwerty',
         }
       }
