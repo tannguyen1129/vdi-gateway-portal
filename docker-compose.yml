@@ -13,8 +13,7 @@ services:
       - vdi_net
     # [THÊM DÒNG NÀY] Tối ưu Java Heap và Buffer cho guacd
     environment:
-      - GUACD_LOG_LEVEL=debug 
-      # Nếu guacd bị kill do thiếu RAM, dòng này giúp nó sống sót
+      - LOG_LEVEL=info
     deploy:
       resources:
         limits:

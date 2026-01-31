@@ -31,46 +31,40 @@ export class VdiService {
   }
 
   // --- HÀM TẠO TOKEN (PHIÊN BẢN VNC - NO PASSWORD) ---
-  generateGuacamoleToken(vm: Vm): string {
-    const connectionSettings = {
-      connection: {
-        type: 'rdp',
-        settings: {
-          'hostname': vm.ip,
-          'port': vm.port.toString(),
-          'username': vm.username,
-          'password': vm.password,
+generateGuacamoleToken(vm: Vm): string {
+  const connectionSettings = {
+    connection: {
+      type: 'rdp',
+      settings: {
+        hostname: vm.ip,
+        port: String(vm.port),
 
-          // 1. Bảo mật
-          'security': 'nla',      
-          'ignore-cert': 'true',
-          // [FIX] Tăng timeout kết nối RDP với Windows
-          'timeout': '60', 
+        // Nếu máy bắt NLA thì cần username/password (nếu bỏ có thể fail)
+        // Manual: NLA cần credentials hoặc prompting :contentReference[oaicite:7]{index=7}
+        username: vm.username,
+        password: vm.password,
 
-          // 2. Fix màn hình đen
-          'enable-gfx': 'true',    
-          'color-depth': '32',      
-          'disable-gfx-h264': 'true',  
-          'disable-gfx-avc444': 'true',
+        security: 'any',
+        'ignore-cert': 'true',
+        timeout: '60', // seconds :contentReference[oaicite:8]{index=8}
 
-          // 3. Cấu hình Resize
-          'resize-method': 'display-update', // Bắt buộc cho auto-resize
-          'dpi': '96',
-          
-          // [QUAN TRỌNG] Đã XÓA 'width' và 'height' cứng ở đây.
-          // Để trình duyệt tự gửi kích thước lên.
+        // Performance/stability
+        'disable-gfx': 'true',                // :contentReference[oaicite:9]{index=9}
+        'color-depth': '16',                  // :contentReference[oaicite:10]{index=10}
+        'disable-bitmap-caching': 'true',     // :contentReference[oaicite:11]{index=11}
+        'disable-offscreen-caching': 'true',  // :contentReference[oaicite:12]{index=12}
+        'disable-glyph-caching': 'true',      // :contentReference[oaicite:13]{index=13}
+        'disable-audio': 'true',              // :contentReference[oaicite:14]{index=14}
 
-          // 4. Các setting khác
-          'disable-audio': 'true',
-          'enable-drive': 'false',
-          'enable-printing': 'false',
-          'disable-wallpaper': 'true', 
-          'disable-theming': 'true',
-          'enable-font-smoothing': 'false',
-          'server-layout': 'en-us-qwerty',
-        }
-      }
-    };
+        'resize-method': 'display-update',    // :contentReference[oaicite:15]{index=15}
+        dpi: '96',
+        'server-layout': 'en-us-qwerty',
+
+        // Các flag kiểu enable-wallpaper/enable-theming... mặc định đã FALSE :contentReference[oaicite:16]{index=16}
+        // => KHÔNG cần set "disable-wallpaper" gì cả.
+      },
+    },
+  };
 
     // Mã hóa Token (Giữ nguyên logic cũ)
     const keyString = 'MySuperSecretKeyForEncryption123';
