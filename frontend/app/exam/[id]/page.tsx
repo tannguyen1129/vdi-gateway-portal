@@ -11,26 +11,41 @@ export default function ExamPage() {
   const { id } = useParams();
   const router = useRouter();
 
+  // State quản lý dữ liệu
   const [user, setUser] = useState<any>(null);
   const [exam, setExam] = useState<any>(null);
   const [token, setToken] = useState<string | null>(null);
+  
+  // State quản lý thông tin hiển thị trên thanh Header
+  const [vmInfo, setVmInfo] = useState<{ name: string; ip?: string } | null>(null);
+  
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [isReady, setIsReady] = useState(false); // Trạng thái sẵn sàng render UI
+  const [isReady, setIsReady] = useState(false); 
+  const [vdiEndTime, setVdiEndTime] = useState<string>("");
 
-  // 1. Check User & Load Info
+  // 1. Check User & Load Exam Info
   useEffect(() => {
     const userStr = localStorage.getItem('user');
     if (!userStr) {
         router.push('/login');
         return;
     }
-    setUser(JSON.parse(userStr));
+    const parsedUser = JSON.parse(userStr);
+    setUser(parsedUser);
 
     const fetchExam = async () => {
         try {
             const res = await api.get(`/exams/${id}`);
             setExam(res.data);
+
+            if (res.data.endTime) {
+                const end = new Date(res.data.endTime);
+                // Cộng thêm 10 phút cho máy ảo
+                const vdiEnd = new Date(end.getTime() + 10 * 60000);
+                setVdiEndTime(vdiEnd.toISOString());
+            }
+
             setIsReady(true);
         } catch (err) {
             alert("Không tìm thấy kỳ thi!");
@@ -50,10 +65,17 @@ export default function ExamPage() {
             accessCode: accessCode
         });
 
+        // Backend trả về: { connectionToken: "...", vm: { username: "...", ip: "..." } }
         if (res.data.connectionToken) {
-            // Khi có Token -> Chuyển state sang hiển thị máy ảo
             setToken(res.data.connectionToken);
-            // Yêu cầu Fullscreen
+            
+            // LƯU THÔNG TIN MÁY ẢO ĐỂ HIỂN THỊ
+            // Ưu tiên hiển thị Username của máy ảo (thường là định danh máy trong lab)
+            // Nếu không có username thì fallback về IP
+            const vmName = res.data.vm?.username || res.data.vm?.ip || "Unknown VM";
+            setVmInfo({ name: vmName, ip: res.data.vm?.ip });
+
+            // Yêu cầu Fullscreen ngay lập tức
             try {
                 await document.documentElement.requestFullscreen();
             } catch (e) { console.log("Fullscreen denied"); }
@@ -75,21 +97,27 @@ export default function ExamPage() {
       } catch (err) { console.error(err); }
   };
 
-  if (!isReady) return <div className="h-screen bg-gray-50 flex items-center justify-center">Đang tải dữ liệu...</div>;
+  if (!isReady) return <div className="h-screen bg-gray-900 text-white flex items-center justify-center">Đang tải dữ liệu thi...</div>;
 
   // --- LOGIC ĐIỀU HƯỚNG HIỂN THỊ ---
-  // Nếu có Token -> Render Máy ảo
+  
+  // Nếu có Token -> Render Màn hình Máy ảo (ExamMachine)
   if (token) {
       return (
-          <ExamMachine 
-              examName={exam.name} 
-              token={token} 
-              onExit={handleExit} 
+          <ExamMachine
+            examName={exam.name}
+            token={token}
+            endTime={vdiEndTime}
+            studentName={user?.fullName || user?.username || "Thí sinh"}
+            vmName={vmInfo?.name || "Máy ảo Lab"}
+            onExit={handleExit}
+            examId={Number(id)}
+            userId={user.id}
           />
       );
   }
 
-  // Nếu chưa có Token -> Render Sảnh chờ
+  // Nếu chưa có Token -> Render Sảnh chờ (ExamLobby)
   return (
       <ExamLobby 
           exam={exam} 

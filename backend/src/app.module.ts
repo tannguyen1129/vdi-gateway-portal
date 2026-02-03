@@ -14,6 +14,9 @@ import { User } from './entities/user.entity';
 import { Vm } from './entities/vm.entity';
 import { Exam } from './entities/exam.entity';
 
+import { MonitorModule } from './modules/monitor/monitor.module'; 
+import { ExamLog } from './entities/exam-log.entity';
+
 @Module({
   imports: [
     // 2. Cấu hình ConfigModule để đọc file .env
@@ -39,6 +42,7 @@ import { Exam } from './entities/exam.entity';
     VdiModule,
     AdminModule, 
     ExamsModule,
+    MonitorModule,
   ],
 })
 export class AppModule {}

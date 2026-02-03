@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   guacd:
-    image: guacamole/guacd
+    image: guacamole/guacd:1.5.5
     container_name: umt_guacd
     restart: always
     env_file:
@@ -46,6 +46,7 @@ services:
       - .env
     ports:
       - "3000:3000"
+      - "4000:4000"
     depends_on:
       - postgres
       - guacd
@@ -54,7 +55,10 @@ services:
 
   # 4. Frontend Client
   frontend:
-    build: ./frontend
+    build: 
+      context: ./frontend
+      args: 
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
     container_name: umt_frontend
     restart: always
     env_file:

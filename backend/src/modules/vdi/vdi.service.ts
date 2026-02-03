@@ -38,38 +38,50 @@ generateGuacamoleToken(vm: Vm): string {
       settings: {
         hostname: vm.ip,
         port: String(vm.port),
-
-        // Nếu máy bắt NLA thì cần username/password (nếu bỏ có thể fail)
-        // Manual: NLA cần credentials hoặc prompting :contentReference[oaicite:7]{index=7}
         username: vm.username,
         password: vm.password,
-
+        
+        // --- BẢO MẬT & MẠNG ---
         security: 'any',
         'ignore-cert': 'true',
-        timeout: '60', // seconds :contentReference[oaicite:8]{index=8}
+        
+        // --- HIỆU NĂNG (TỐI ƯU HÓA ĐỂ KHÔNG BỊ DISCONNECT) ---
+        // Ép buộc giảm tải đồ họa xuống mức thấp nhất
+        'disable-wallpaper': 'true',      // [NÊN CÓ] Tắt hình nền
+        'disable-theming': 'true',        // [NÊN CÓ] Tắt giao diện màu mè
+        'disable-menu-animations': 'true',// [NÊN CÓ] Tắt hiệu ứng menu
+        'disable-aero': 'true',           // Tắt hiệu ứng kính mờ (nếu Win7/Server cũ)
+        
+        // Bật caching để mượt hơn (nếu thấy glitch có thể bật lại disable)
+        'disable-bitmap-caching': 'false',
+        'disable-offscreen-caching': 'false',
+        'disable-glyph-caching': 'false',
+        
+        // Giảm băng thông tối đa
+        'disable-audio': 'true',          
+        'color-depth': '16',              // 16-bit màu (nhẹ hơn 32-bit nhiều)
+        
+        // Giảm tải render để mượt hơn
+        'enable-font-smoothing': 'false',
+        'disable-full-window-drag': 'true',
+        'disable-cursor-shadow': 'true',
+        'disable-cursor-blinking': 'true',
 
-        // Performance/stability
-        'disable-gfx': 'true',                // :contentReference[oaicite:9]{index=9}
-        'color-depth': '16',                  // :contentReference[oaicite:10]{index=10}
-        'disable-bitmap-caching': 'true',     // :contentReference[oaicite:11]{index=11}
-        'disable-offscreen-caching': 'true',  // :contentReference[oaicite:12]{index=12}
-        'disable-glyph-caching': 'true',      // :contentReference[oaicite:13]{index=13}
-        'disable-audio': 'true',              // :contentReference[oaicite:14]{index=14}
-
-        'resize-method': 'display-update',    // :contentReference[oaicite:15]{index=15}
+        // Cấu hình hiển thị
+        'resize-method': 'display-update',
         dpi: '96',
         'server-layout': 'en-us-qwerty',
-
-        // Các flag kiểu enable-wallpaper/enable-theming... mặc định đã FALSE :contentReference[oaicite:16]{index=16}
-        // => KHÔNG cần set "disable-wallpaper" gì cả.
       },
     },
   };
 
     // Mã hóa Token (Giữ nguyên logic cũ)
-    const keyString = 'MySuperSecretKeyForEncryption123';
+    const MY_SECRET_KEY = process.env.VDI_SECRET_KEY ?? '';
+    if (!MY_SECRET_KEY) throw new Error("Missing VDI_SECRET_KEY");
+    const MY_SECRET_KEY_BYTES = crypto.createHash('sha256').update(MY_SECRET_KEY).digest();
+
     const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv('aes-256-cbc', keyString, iv);
+    const cipher = crypto.createCipheriv('aes-256-cbc', MY_SECRET_KEY_BYTES, iv);
     
     let encrypted = cipher.update(JSON.stringify(connectionSettings), 'utf8', 'base64');
     encrypted += cipher.final('base64');

@@ -2,149 +2,379 @@
 "use client";
 import React, { useEffect, useRef, useState } from "react";
 import Guacamole from "guacamole-common-js";
+import { useKioskMode } from "../hooks/useKioskMode";
+
+// WebSocketTunnel mặc định không giữ state parser giữa các message,
+// dẫn tới lỗi "Invalid array length" nếu message bị cắt. Tạo tunnel
+// có parser streaming để xử lý chunk an toàn.
+class StableWebSocketTunnel extends Guacamole.Tunnel {
+  private socket: WebSocket | null = null;
+  private parser = new (Guacamole as any).Parser();
+
+  constructor(private url: string) {
+    super();
+    this.parser.oninstruction = (opcode: string, args: string[]) => {
+      if (this.oninstruction) this.oninstruction(opcode, args);
+    };
+  }
+
+  connect(_data?: string) {
+    // [FIX LỖI TS]: Ép kiểu (this as any) để gọi hàm setState
+    (this as any).setState(Guacamole.Tunnel.State.CONNECTING);
+    
+    this.socket = new WebSocket(this.url, "guacamole");
+
+    this.socket.onopen = () => {
+      (this as any).setState(Guacamole.Tunnel.State.OPEN);
+    };
+
+    this.socket.onmessage = (event) => {
+      const handleText = (text: string) => {
+        try {
+          this.parser.receive(text);
+        } catch (e) {
+          if (this.onerror) {
+            this.onerror(new (Guacamole as any).Status(
+              (Guacamole as any).Status.Code.SERVER_ERROR,
+              "Protocol parse error",
+            ));
+          }
+        }
+      };
+
+      if (typeof event.data === "string") {
+        handleText(event.data);
+      } else if (event.data instanceof ArrayBuffer) {
+        const text = new TextDecoder("utf-8").decode(new Uint8Array(event.data));
+        handleText(text);
+      } else if (event.data instanceof Blob) {
+        event.data.text().then(handleText);
+      }
+    };
+
+    this.socket.onclose = (event) => {
+      (this as any).setState(Guacamole.Tunnel.State.CLOSED);
+      if (this.onerror && event.code && event.reason) {
+        this.onerror(new (Guacamole as any).Status(event.code, event.reason));
+      }
+    };
+  }
+
+  disconnect() {
+    if (this.socket && this.socket.readyState < 2) {
+      this.socket.close();
+    }
+    (this as any).setState(Guacamole.Tunnel.State.CLOSED);
+  }
+
+  sendMessage(opcode: string, ...args: any[]) {
+    if (!this.isConnected() || !this.socket) return;
+    let message = `${String(opcode).length}.${opcode}`;
+    for (const arg of args) {
+      const value = String(arg);
+      message += `,${value.length}.${value}`;
+    }
+    message += ";";
+    this.socket.send(message);
+  }
+}
 
 interface GuacamoleDisplayProps {
   token: string | null;
+  endTime?: string;
+  onTimeUp?: () => void;
+  studentName?: string;
+  vmName?: string;
+  onExit?: () => void;
+  onViolation?: (type: string) => void;
+  suppressViolation?: boolean;
 }
 
-export default function GuacamoleDisplay({ token }: GuacamoleDisplayProps) {
+export default function GuacamoleDisplay({ 
+  token, 
+  endTime, 
+  onTimeUp, 
+  studentName = "Thí sinh", 
+  vmName = "VM-01",
+  onExit,
+  onViolation,
+  suppressViolation = false
+}: GuacamoleDisplayProps) {
   const displayRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const clientRef = useRef<any>(null);
-  const hasConnected = useRef(false);
+  const displayRefSize = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
 
-  const [status, setStatus] = useState("INITIALIZING");
+  // --- 1. LOGIC ĐẾM NGƯỢC ---
+  const [timeLeftStr, setTimeLeftStr] = useState("--:--:--");
+  const [isTimeUp, setIsTimeUp] = useState(false);
+  const [isCriticalTime, setIsCriticalTime] = useState(false);
 
   useEffect(() => {
-    if (!token || hasConnected.current) return;
-    hasConnected.current = true;
+    if (!endTime) return;
+    const interval = setInterval(() => {
+      const now = new Date().getTime();
+      const end = new Date(endTime).getTime();
+      const distance = end - now;
+
+      if (distance < 0) {
+        clearInterval(interval);
+        setTimeLeftStr("00:00:00");
+        setIsTimeUp(true);
+        if (onTimeUp) onTimeUp();
+      } else {
+        const h = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        const m = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+        const s = Math.floor((distance % (1000 * 60)) / 1000);
+        setTimeLeftStr(`${h}:${m < 10 ? '0'+m : m}:${s < 10 ? '0'+s : s}`);
+        
+        if (distance < 5 * 60 * 1000) setIsCriticalTime(true);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [endTime, onTimeUp]);
+
+  // --- 2. LOGIC KIOSK & STATUS ---
+  // Hook trả về trạng thái khóa/màn hình
+  const { setupKioskInput, enterExamMode, isLocked, isFullScreen, isTabActive } = useKioskMode(!isTimeUp);
+  const [status, setStatus] = useState("INITIALIZING");
+  const isConnected = status === "CONNECTED";
+
+  // Logic phát hiện vi phạm và gửi báo cáo
+  useEffect(() => {
+      if (suppressViolation) return;
+      if (isConnected && !isTimeUp) {
+          if (!isFullScreen) {
+              onViolation && onViolation("EXIT_FULLSCREEN");
+          }
+          if (!isTabActive) {
+              onViolation && onViolation("TAB_SWITCH");
+          }
+      }
+  }, [isFullScreen, isTabActive, isConnected, isTimeUp, onViolation, suppressViolation]);
+
+  const handleResume = () => {
+      if (clientRef.current) {
+          const displayEl = clientRef.current.getDisplay().getElement();
+          enterExamMode(displayEl);
+      }
+  };
+
+  // --- 3. GUACAMOLE CONNECTION ---
+  useEffect(() => {
+    if (!token) return;
+    let tunnel: any = null;
+    let client: any = null;
+    let cleanupInput: any = null;
 
     const connectVDI = () => {
       try {
         setStatus("CONNECTING");
+        const wsProto = window.location.protocol === 'https:' ? 'wss' : 'ws';
 
-        // ✅ Dùng wss nếu website đang chạy https
-        const wsProto = window.location.protocol === "https:" ? "wss" : "ws";
+        const getContainerSize = () => {
+          const w = containerRef.current?.clientWidth || window.innerWidth;
+          const h = containerRef.current?.clientHeight || window.innerHeight;
+          return { w, h };
+        };
 
-        // Nếu backend WS của bạn đang ở :3000 như cũ thì giữ nguyên
-        const wsUrl = `${wsProto}://${window.location.hostname}:3000/guaclite`;
+        const { w: width, h: height } = getContainerSize();
+        const query = new URLSearchParams({
+          token: token,
+          width: String(width),
+          height: String(height),
+          dpi: '96',
+        });
 
-        const tunnel = new Guacamole.WebSocketTunnel(wsUrl);
-        const client = new Guacamole.Client(tunnel);
+        // Đảm bảo URL có path /guaclite như backend đã cấu hình
+        const wsUrl = `${wsProto}://${window.location.hostname}:3000/guaclite?${query.toString()}`;
+        
+        const tunnel = new StableWebSocketTunnel(wsUrl);
+
+        client = new Guacamole.Client(tunnel);
         clientRef.current = client;
 
-        // ✅ Track state theo CLIENT (ổn định hơn tunnel)
+        const applyScale = () => {
+          if (!containerRef.current || !clientRef.current) return;
+          const display = clientRef.current.getDisplay();
+          const displayW = display.getWidth();
+          const displayH = display.getHeight();
+          if (!displayW || !displayH) return;
+
+          const containerW = containerRef.current.clientWidth;
+          const containerH = containerRef.current.clientHeight;
+          const scale = Math.min(containerW / displayW, containerH / displayH);
+          display.scale(scale);
+          displayRefSize.current = { w: displayW, h: displayH };
+        };
+
         client.onstatechange = (state: number) => {
-          // 0 IDLE, 1 CONNECTING, 2 WAITING, 3 CONNECTED, 4 DISCONNECTING, 5 DISCONNECTED
           const map = ["IDLE", "CONNECTING", "WAITING", "CONNECTED", "DISCONNECTING", "DISCONNECTED"];
           setStatus(map[state] || `STATE_${state}`);
+          if (state === 3) {
+            setTimeout(applyScale, 0);
+          }
         };
 
-        client.onerror = (e: any) => {
-          console.error("Guac Error:", e);
-          setStatus(`ERROR: ${e?.message || "Connection failed"}`);
-        };
-
-        tunnel.onerror = (e: any) => {
-          console.error("Tunnel Error:", e);
-        };
+        client.onerror = (e: any) => { console.error("Guac Error:", e); setStatus("CONNECTION ERROR"); };
 
         const displayEl = client.getDisplay().getElement();
-
-        // ✅ để bắt phím cho chắc
-        (displayEl as any).tabIndex = 0;
-        displayEl.addEventListener("click", () => (displayEl as any).focus());
-
+        (displayEl as any).tabIndex = 0; 
+        
         if (displayRef.current) {
           displayRef.current.innerHTML = "";
           displayRef.current.appendChild(displayEl);
         }
 
-        // Lấy size khung
-        let width = 1024;
-        let height = 768;
-        if (containerRef.current) {
-          width = containerRef.current.clientWidth;
-          height = containerRef.current.clientHeight;
-        }
+        cleanupInput = setupKioskInput(client, displayEl);
 
-        // ✅ FIX QUAN TRỌNG: encode token bằng URLSearchParams (tránh '+' -> space)
-        const params = new URLSearchParams({
-          token: token, // URLSearchParams sẽ encode an toàn
-          width: String(width),
-          height: String(height),
-        });
+        client.connect('');
 
-        client.connect(params.toString());
-
-        // Mouse
-        const mouse = new Guacamole.Mouse(displayEl) as any;
-        displayEl.oncontextmenu = (e: any) => {
-          e.preventDefault();
-          return false;
-        };
-        mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (s: any) => {
-          clientRef.current?.sendMouseState(s);
-        };
-
-        // Keyboard (gắn vào displayEl thay vì document cho đỡ “ăn” toàn trang)
         const kbd = new Guacamole.Keyboard(displayEl) as any;
         kbd.onkeydown = (k: any) => clientRef.current?.sendKeyEvent(1, k);
         kbd.onkeyup = (k: any) => clientRef.current?.sendKeyEvent(0, k);
 
-        // Resize realtime
         const handleResize = () => {
-          if (!clientRef.current || !containerRef.current) return;
-          const w = containerRef.current.clientWidth;
-          const h = containerRef.current.clientHeight;
-          clientRef.current.sendSize(w, h);
+           if (clientRef.current && containerRef.current) {
+              clientRef.current.sendSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
+           }
+           applyScale();
         };
-
         window.addEventListener("resize", handleResize);
 
-        // Nếu container đổi size do layout (topbar, fullscreen...), bắt luôn bằng ResizeObserver
-        const ro = new ResizeObserver(handleResize);
-        if (containerRef.current) ro.observe(containerRef.current);
+        // Gửi size lại sau khi layout ổn định để tránh bị lệch nửa màn hình
+        setTimeout(() => {
+          const { w, h } = getContainerSize();
+          clientRef.current?.sendSize(w, h);
+          applyScale();
+        }, 150);
 
-        // Cleanup
         return () => {
-          ro.disconnect();
+          if (cleanupInput) cleanupInput();
           window.removeEventListener("resize", handleResize);
-          try {
-            clientRef.current?.disconnect();
-          } catch {}
+          try { client.disconnect(); } catch {}
         };
       } catch (err) {
         console.error(err);
         setStatus("CLIENT_EXCEPTION");
+        return () => {};
       }
     };
+    const cleanupFunc = connectVDI();
+    return () => { if (cleanupFunc) cleanupFunc(); };
+  }, [token, setupKioskInput]);
 
-    const cleanup = connectVDI();
-
-    return () => {
-      try {
-        cleanup && (cleanup as any)();
-      } catch {}
-    };
-  }, [token]);
-
-  const isConnected = status === "CONNECTED";
+  // --- 4. TRẠNG THÁI HIỂN THỊ ---
+  const isViolation = isConnected && !isTimeUp && (!isFullScreen || !isTabActive);
+  const isUnlockedWarning = isConnected && !isTimeUp && isFullScreen && !isLocked;
 
   return (
-    <div
-      ref={containerRef}
-      className="w-full h-full bg-black flex items-center justify-center relative overflow-hidden"
-    >
-      {!isConnected && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-900 text-white z-50">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
-            <p>{status}</p>
-          </div>
+    <div className="flex flex-col w-full h-screen bg-gray-900 overflow-hidden select-none font-sans">
+      
+      {/* === [1] INFO HEADER === */}
+      {isConnected && !isViolation && (
+        <div className="h-8 bg-[#1a1a1a] flex items-center justify-between px-4 text-xs z-[60] border-b border-gray-800 flex-none">
+           <div className="flex items-center gap-4 text-gray-400">
+              <div className="flex items-center gap-2">
+                 <span className="text-gray-500">Thí sinh:</span>
+                 <span className="font-bold text-white uppercase">{studentName}</span>
+              </div>
+              <span className="w-[1px] h-3 bg-gray-700"></span>
+              <div className="flex items-center gap-2">
+                 <span className="text-gray-500">Máy ảo:</span>
+                 <span className="font-mono text-yellow-500">{vmName}</span>
+              </div>
+           </div>
+
+           {endTime && (
+              <div className={`font-mono font-bold text-sm tracking-wide ${
+                  isCriticalTime ? 'text-red-500 animate-pulse' : 'text-blue-400'
+              }`}>
+                  {isTimeUp ? "HẾT GIỜ" : timeLeftStr}
+              </div>
+           )}
         </div>
       )}
-      <div ref={displayRef} className="shadow-2xl bg-black" />
+
+      {/* === [2] SAFETY BAR === */}
+      <div 
+         className="h-1.5 bg-blue-600 w-full z-50 flex-none cursor-pointer hover:bg-blue-500 transition-colors shadow-md shadow-blue-900/50"
+         onClick={handleResume}
+         title="Click vào đây để khóa lại chuột"
+      />
+
+      {/* === [3] ACTION BAR === */}
+      {isConnected && !isViolation && (
+        <div className="h-10 bg-gray-900 flex items-center justify-between px-4 border-b border-gray-800 z-40 flex-none">
+            <div className="text-gray-500 text-xs italic flex items-center gap-2">
+                {isLocked ? (
+                    <>
+                        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                        <span>Đang khóa chuột. Nhấn <b>Alt + Enter</b> để hiện con trỏ.</span>
+                    </>
+                ) : (
+                    <>
+                        <span className="w-2 h-2 bg-yellow-500 rounded-full"></span>
+                        <span>Đã hiện chuột. Click vào màn hình đen để điều khiển lại.</span>
+                    </>
+                )}
+            </div>
+
+            <button 
+                onClick={onExit}
+                className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-5 py-1.5 rounded shadow transition-all hover:scale-105 active:scale-95 flex items-center gap-2"
+            >
+                <span>⏹</span> NỘP BÀI & THOÁT
+            </button>
+        </div>
+      )}
+
+      {/* === [4] VM DISPLAY AREA === */}
+      <div ref={containerRef} className="flex-1 relative w-full bg-black overflow-hidden group">
+          
+          {/* Cảnh báo vi phạm */}
+          {isViolation && (
+              <div className="absolute inset-0 z-[200] bg-red-900/95 flex flex-col items-center justify-center text-white animate-fade-in p-8 text-center cursor-default">
+                  <div className="bg-black/50 p-8 rounded-2xl border-4 border-red-500 shadow-2xl max-w-2xl">
+                      <div className="text-6xl mb-4">⚠️</div>
+                      <h2 className="text-3xl font-bold mb-4 uppercase text-red-400">Cảnh báo hệ thống</h2>
+                      <p className="text-xl mb-6">{!isFullScreen ? "Bạn đã thoát khỏi chế độ Toàn màn hình." : "Hệ thống phát hiện bạn đã chuyển Tab."}</p>
+                      <button onClick={handleResume} className="px-8 py-4 bg-white text-red-900 font-bold text-lg rounded-lg shadow-lg hover:bg-gray-200 transition transform">QUAY LẠI LÀM BÀI NGAY</button>
+                  </div>
+              </div>
+          )}
+
+          {/* Cảnh báo mất chuột tạm thời */}
+          {isUnlockedWarning && !isViolation && (
+             <div className="absolute inset-0 z-[150] bg-black/60 flex flex-col items-center justify-center cursor-pointer backdrop-blur-sm" onClick={handleResume}>
+                 <div className="bg-blue-600/90 text-white p-6 rounded-xl shadow-2xl animate-bounce text-center border border-white/20">
+                     <h3 className="text-2xl font-bold mb-2">CLICK ĐỂ TIẾP TỤC</h3>
+                     <p className="text-sm opacity-90">Chuột đã bị thoát ra ngoài. Click vào đây để tiếp tục.</p>
+                 </div>
+             </div>
+          )}
+
+          {/* Loading */}
+          {!isConnected && (
+            <div className="absolute inset-0 flex items-center justify-center bg-gray-900 text-white z-50">
+               <div className="flex flex-col items-center">
+                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mb-4"></div>
+                 <p className="font-mono text-sm tracking-widest">{status}</p>
+               </div>
+            </div>
+          )}
+
+          {/* Tooltip hướng dẫn (Hover) */}
+          {isLocked && !isViolation && (
+             <div className="absolute top-0 left-1/2 transform -translate-x-1/2 z-50 opacity-0 group-hover:opacity-100 transition-opacity duration-500 delay-1000 pointer-events-none">
+                 <div className="bg-black/50 text-white text-[10px] px-3 py-1 rounded-b backdrop-blur-sm border border-white/10">
+                    Nhấn <b>Alt + Enter</b> để hiện chuột nộp bài
+                 </div>
+             </div>
+          )}
+
+          <div ref={displayRef} className="absolute inset-0 z-10 w-full h-full" />
+      </div>
     </div>
   );
 }
