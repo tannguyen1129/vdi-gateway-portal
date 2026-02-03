@@ -32,48 +32,44 @@ export class VdiService {
 
   // --- HÀM TẠO TOKEN (PHIÊN BẢN VNC - NO PASSWORD) ---
 generateGuacamoleToken(vm: Vm): string {
-  const connectionSettings = {
-    connection: {
-      type: 'rdp',
-      settings: {
-        hostname: vm.ip,
-        port: String(vm.port),
-        username: vm.username,
-        password: vm.password,
-        
-        // --- BẢO MẬT & MẠNG ---
-        security: 'any',
-        'ignore-cert': 'true',
-        
-        // --- HIỆU NĂNG (TỐI ƯU HÓA ĐỂ KHÔNG BỊ DISCONNECT) ---
-        // Ép buộc giảm tải đồ họa xuống mức thấp nhất
-        'disable-wallpaper': 'true',      // [NÊN CÓ] Tắt hình nền
-        'disable-theming': 'true',        // [NÊN CÓ] Tắt giao diện màu mè
-        'disable-menu-animations': 'true',// [NÊN CÓ] Tắt hiệu ứng menu
-        'disable-aero': 'true',           // Tắt hiệu ứng kính mờ (nếu Win7/Server cũ)
-        
-        // Bật caching để mượt hơn (nếu thấy glitch có thể bật lại disable)
-        'disable-bitmap-caching': 'false',
-        'disable-offscreen-caching': 'false',
-        'disable-glyph-caching': 'false',
-        
-        // Giảm băng thông tối đa
-        'disable-audio': 'true',          
-        'color-depth': '16',              // 16-bit màu (nhẹ hơn 32-bit nhiều)
-        
-        // Giảm tải render để mượt hơn
-        'enable-font-smoothing': 'false',
-        'disable-full-window-drag': 'true',
-        'disable-cursor-shadow': 'true',
-        'disable-cursor-blinking': 'true',
-
-        // Cấu hình hiển thị
-        'resize-method': 'display-update',
-        dpi: '96',
-        'server-layout': 'en-us-qwerty',
+    const connectionSettings = {
+      connection: {
+        type: 'rdp',
+        settings: {
+          hostname: vm.ip,
+          port: String(vm.port),
+          username: vm.username,
+          password: vm.password,
+          
+          // --- [FIX] BẢO MẬT & MẠNG ---
+          security: 'any',
+          'ignore-cert': 'true',
+          'enable-keep-alive': 'true',       // [QUAN TRỌNG] Giữ kết nối
+          'keep-alive-interval': '30',       // Ping mỗi 30s
+          
+          // --- HIỆU NĂNG ---
+          'disable-wallpaper': 'true',
+          'disable-theming': 'true',
+          'disable-menu-animations': 'true',
+          'disable-aero': 'true',
+          
+          // Bật cache để đỡ tốn băng thông
+          'disable-bitmap-caching': 'false',
+          'disable-offscreen-caching': 'false',
+          'disable-glyph-caching': 'false',
+          
+          'disable-audio': 'true',          
+          'color-depth': '16',              
+          
+          'enable-font-smoothing': 'false',
+          'disable-full-window-drag': 'true',
+          
+          'resize-method': 'display-update', // Resize mượt mà
+          dpi: '96',
+          'server-layout': 'en-us-qwerty',
+        },
       },
-    },
-  };
+    };
 
     // Mã hóa Token (Giữ nguyên logic cũ)
     const MY_SECRET_KEY = process.env.VDI_SECRET_KEY ?? '';

@@ -163,56 +163,87 @@ export default function GuacamoleDisplay({
   // --- 3. GUACAMOLE CONNECTION ---
   useEffect(() => {
     if (!token) return;
-    let tunnel: any = null;
+    
+    // Cleanup variables
     let client: any = null;
+    let tunnel: any = null;
     let cleanupInput: any = null;
+    let resizeObserver: ResizeObserver | null = null;
 
     const connectVDI = () => {
       try {
         setStatus("CONNECTING");
         const wsProto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const resolveWsBase = () => {
+          const raw = (process.env.NEXT_PUBLIC_VDI_URL || '').trim();
+          if (raw) {
+            let base = raw.replace(/\/+$/, '');
+            if (base.startsWith('http://')) base = `ws://${base.slice('http://'.length)}`;
+            else if (base.startsWith('https://')) base = `wss://${base.slice('https://'.length)}`;
+            else if (!base.startsWith('ws://') && !base.startsWith('wss://')) {
+              base = `${wsProto}://${base}`;
+            }
+            return base;
+          }
 
-        const getContainerSize = () => {
-          const w = containerRef.current?.clientWidth || window.innerWidth;
-          const h = containerRef.current?.clientHeight || window.innerHeight;
-          return { w, h };
+          const host = process.env.NEXT_PUBLIC_VDI_HOST || window.location.hostname;
+          const port = process.env.NEXT_PUBLIC_VDI_PORT || '4000';
+          return `${wsProto}://${host}:${port}`;
         };
 
-        const { w: width, h: height } = getContainerSize();
+        // Lấy kích thước ban đầu
+        const w = containerRef.current?.clientWidth || window.innerWidth;
+        const h = containerRef.current?.clientHeight || window.innerHeight;
+
         const query = new URLSearchParams({
           token: token,
-          width: String(width),
-          height: String(height),
+          width: String(Math.floor(w)),
+          height: String(Math.floor(h)),
           dpi: '96',
         });
 
-        // Đảm bảo URL có path /guaclite như backend đã cấu hình
-        const wsUrl = `${wsProto}://${window.location.hostname}:3000/guaclite?${query.toString()}`;
-        
-        const tunnel = new StableWebSocketTunnel(wsUrl);
+        const wsUrl = `${resolveWsBase()}/guaclite?${query.toString()}`;
+
+        tunnel = new StableWebSocketTunnel(wsUrl);
 
         client = new Guacamole.Client(tunnel);
         clientRef.current = client;
 
-        const applyScale = () => {
-          if (!containerRef.current || !clientRef.current) return;
-          const display = clientRef.current.getDisplay();
-          const displayW = display.getWidth();
-          const displayH = display.getHeight();
-          if (!displayW || !displayH) return;
+        // [FIX] Hàm xử lý resize chuẩn
+        const handleResize = () => {
+           if (!containerRef.current || !client) return;
+           
+           const display = client.getDisplay();
+           const displayW = display.getWidth();
+           const displayH = display.getHeight();
+           
+           if (displayW === 0 || displayH === 0) return;
 
-          const containerW = containerRef.current.clientWidth;
-          const containerH = containerRef.current.clientHeight;
-          const scale = Math.min(containerW / displayW, containerH / displayH);
-          display.scale(scale);
-          displayRefSize.current = { w: displayW, h: displayH };
+           const containerW = containerRef.current.clientWidth;
+           const containerH = containerRef.current.clientHeight;
+
+           // Tính tỷ lệ scale để hình ảnh luôn nằm trọn trong khung (Letterbox)
+           const scale = Math.min(containerW / displayW, containerH / displayH);
+           
+           display.scale(scale);
         };
 
+        // Dùng ResizeObserver thay vì window.resize để bắt được thay đổi của thẻ div cha
+        resizeObserver = new ResizeObserver(() => {
+            window.requestAnimationFrame(handleResize);
+        });
+        
+        if (containerRef.current) {
+            resizeObserver.observe(containerRef.current);
+        }
+
+        // ... (Phần client.onstatechange giữ nguyên) ...
         client.onstatechange = (state: number) => {
           const map = ["IDLE", "CONNECTING", "WAITING", "CONNECTED", "DISCONNECTING", "DISCONNECTED"];
           setStatus(map[state] || `STATE_${state}`);
-          if (state === 3) {
-            setTimeout(applyScale, 0);
+          if (state === 3) { // Connected
+             // Đợi một chút để render xong rồi mới scale
+             setTimeout(handleResize, 100);
           }
         };
 
@@ -227,41 +258,28 @@ export default function GuacamoleDisplay({
         }
 
         cleanupInput = setupKioskInput(client, displayEl);
-
         client.connect('');
 
+        // Keyboard handler (Giữ nguyên)
         const kbd = new Guacamole.Keyboard(displayEl) as any;
         kbd.onkeydown = (k: any) => clientRef.current?.sendKeyEvent(1, k);
         kbd.onkeyup = (k: any) => clientRef.current?.sendKeyEvent(0, k);
 
-        const handleResize = () => {
-           if (clientRef.current && containerRef.current) {
-              clientRef.current.sendSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
-           }
-           applyScale();
-        };
-        window.addEventListener("resize", handleResize);
-
-        // Gửi size lại sau khi layout ổn định để tránh bị lệch nửa màn hình
-        setTimeout(() => {
-          const { w, h } = getContainerSize();
-          clientRef.current?.sendSize(w, h);
-          applyScale();
-        }, 150);
-
-        return () => {
-          if (cleanupInput) cleanupInput();
-          window.removeEventListener("resize", handleResize);
-          try { client.disconnect(); } catch {}
-        };
       } catch (err) {
         console.error(err);
         setStatus("CLIENT_EXCEPTION");
-        return () => {};
       }
     };
-    const cleanupFunc = connectVDI();
-    return () => { if (cleanupFunc) cleanupFunc(); };
+
+    connectVDI();
+
+    return () => {
+      if (cleanupInput) cleanupInput();
+      if (resizeObserver) resizeObserver.disconnect();
+      if (client) {
+         try { client.disconnect(); } catch {}
+      }
+    };
   }, [token, setupKioskInput]);
 
   // --- 4. TRẠNG THÁI HIỂN THỊ ---

@@ -2,7 +2,7 @@
 import axios from 'axios';
 
 // 1. Lấy URL gốc từ biến môi trường (hoặc fallback)
-let baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://217.216.33.134:3000';
+let baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://217.216.33.134:4000';
 
 // 2. Xử lý chuẩn hóa URL: 
 // - Xóa dấu gạch chéo cuối nếu có

@@ -7,32 +7,42 @@ import * as net from 'net';
 // [CẤU HÌNH]
 const MY_SECRET_KEY = process.env.VDI_SECRET_KEY ?? '';
 if (!MY_SECRET_KEY) throw new Error("Missing VDI_SECRET_KEY");
-// AES-256-CBC yêu cầu key 32 bytes
 const MY_SECRET_KEY_BYTES = crypto.createHash('sha256').update(MY_SECRET_KEY).digest();
+
 const GUAC_PREFER_JPEG = (process.env.GUAC_PREFER_JPEG || '').toLowerCase() === 'true';
-const GUACD_HOST = 'guacd';
+const GUACD_HOST = 'guacd'; // Đảm bảo tên service trong docker-compose là 'guacd'
 const GUACD_PORT = 4822;
+const API_PORT = parseInt(process.env.PORT || '4000', 10);
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.setGlobalPrefix('api');
   app.enableCors({ origin: true, credentials: true });
 
-  const server = app.getHttpServer();
-  
-  // WebSocket Server chạy chung port 3000
-  const wss = new WebSocketServer({ noServer: true });
+  await app.listen(API_PORT);
+  console.log(`✅ Backend API running on port ${API_PORT}`);
 
+  const server = app.getHttpServer();
+  const wss = new WebSocketServer({
+    noServer: true,
+    handleProtocols: (protocols) => {
+      if (protocols.has('guacamole')) return 'guacamole';
+      const first = protocols.values().next().value;
+      return first ?? false;
+    },
+  });
+
+  // Xử lý WebSocket VDI
   wss.on('connection', (ws, req) => {
-    console.log('🔌 [VDI] Client connected (Port 3000)!');
+    console.log(`🔌 [VDI] New Connection Request: ${req.url}`);
 
     let connectionSettings: any = null;
     let guacClient: net.Socket | null = null;
     let handshakeState: 'WAITING_ARGS' | 'WAITING_READY' | 'READY' = 'WAITING_ARGS';
+    let buffer = '';
 
     // 1. Giải mã Token
     try {
-      // Lấy token từ URL (hỗ trợ cả /guaclite?token=... và /?token=...)
       const urlString = req.url.startsWith('/') ? `http://localhost${req.url}` : req.url;
       const urlObj = new URL(urlString);
       const token = urlObj.searchParams.get('token');
@@ -50,100 +60,124 @@ async function bootstrap() {
       
       connectionSettings = JSON.parse(decrypted);
 
-      // Override kích thước nếu client gửi lên (đảm bảo full màn hình)
+      // Override kích thước
       if (connectionSettings?.connection?.settings) {
         if (widthParam) connectionSettings.connection.settings.width = widthParam;
         if (heightParam) connectionSettings.connection.settings.height = heightParam;
         if (dpiParam) connectionSettings.connection.settings.dpi = dpiParam;
       }
-      console.log(`✅ [VDI] Target: ${connectionSettings.connection.settings.hostname}`);
+      console.log(`✅ [VDI] Token Decrypted. Target VM: ${connectionSettings.connection.settings.hostname}`);
     } catch (e) {
-      console.error('❌ [VDI] Token Error:', e.message);
+      console.error('❌ [VDI] Token Invalid:', e.message);
       ws.close(1008, 'Invalid Token');
       return;
     }
 
-    // 2. Kết nối tới Guacd (TCP)
+    // 2. Kết nối tới Guacd
+    console.log(`➡️ [VDI] Connecting to Guacd (${GUACD_HOST}:${GUACD_PORT})...`);
     guacClient = net.createConnection(GUACD_PORT, GUACD_HOST);
 
+    // Timeout nếu Guacd không phản hồi sau 10s
+    guacClient.setTimeout(10000);
+    guacClient.on('timeout', () => {
+        console.error('🔥 [VDI] Guacd Connection Timeout!');
+        guacClient.destroy();
+        ws.close(1011, 'Guacd Timeout');
+    });
+
     guacClient.on('connect', () => {
+      console.log('✅ [VDI] Connected to Guacd! Sending Handshake...');
       const protocol = connectionSettings.connection.type || 'rdp';
-      // Gửi handshake chọn giao thức
-      guacClient?.write(`6.select,${protocol.length}.${protocol};`);
+      // Gửi handshake chọn giao thức (Step 1)
+      guacClient.write(`6.select,${protocol.length}.${protocol};`);
     });
 
     guacClient.on('error', (err) => {
-        console.error('🔥 [VDI] Guacd Error:', err.message);
+        console.error('🔥 [VDI] Guacd Socket Error:', err.message);
         ws.close();
     });
 
-    // 3. Xử lý dữ liệu từ Guacd -> Browser
+    // 3. Xử lý dữ liệu từ Guacd
     guacClient.on('data', (dataBuffer) => {
-      // Guacamole protocol là UTF-8 text, cần giữ đúng ký tự để length chuẩn
       const msgString = dataBuffer.toString('utf8');
-
+      
+      // Nếu đã Ready, truyền thẳng (Fast path)
       if (handshakeState === 'READY') {
         ws.send(msgString);
         return;
       }
 
-      if (handshakeState === 'WAITING_ARGS' && msgString.startsWith('4.args')) {
-        const currentIdx = msgString.indexOf(',') + 1;
-        const argNames = msgString
-          .substring(currentIdx)
-          .split(',')
-          .map((s) => {
-            const dotIdx = s.indexOf('.');
-            return s.substring(dotIdx + 1).replace(';', '');
-          });
+      buffer += msgString;
 
-        const settings = connectionSettings.connection.settings;
-        const width = String(settings.width || '1024');
-        const height = String(settings.height || '768');
-        const dpi = String(settings.dpi || '96');
+      // [DEBUG] Log handshake packet
+      // console.log(`📩 [VDI] Guacd Packet: ${msgString.substring(0, 50)}...`);
 
-        guacClient?.write(
-          `4.size,${width.length}.${width},${height.length}.${height},${dpi.length}.${dpi};`,
-        );
-        guacClient?.write(`5.audio,9.audio/ogg;`);
-        if (GUAC_PREFER_JPEG) {
-          // Ưu tiên JPEG để giảm băng thông, vẫn giữ PNG làm fallback
-          guacClient?.write(`5.image,10.image/jpeg;`);
-          guacClient?.write(`5.image,9.image/png;`);
-        } else {
-          // Mặc định PNG để đảm bảo tương thích hiển thị
-          guacClient?.write(`5.image,9.image/png;`);
-        }
-
-        let connectOp = '7.connect';
-        argNames.forEach((arg) => {
-          const val = String(settings[arg] || '');
-          connectOp += `,${val.length}.${val}`;
-        });
-        connectOp += ';';
-        guacClient?.write(connectOp);
-
-        handshakeState = 'WAITING_READY';
-        return;
+      // Xử lý lỗi từ Guacd (VD: 5.error...)
+      if (buffer.indexOf('5.error') !== -1) {
+          console.error('❌ [VDI] Guacd sent ERROR during handshake:', buffer);
+          ws.close(1011, 'Guacd Error');
+          return;
       }
 
-      if (handshakeState === 'WAITING_READY' && msgString.startsWith('5.ready')) {
-        console.log('✅ [VDI] Handshake Complete!');
-        handshakeState = 'READY';
-        // Gửi gói ready dạng text để Client JS nhận diện được
-        ws.send(msgString);
+      // Step 2: Nhận Arguments (4.args...)
+      if (handshakeState === 'WAITING_ARGS') {
+        const argsIdx = buffer.indexOf('4.args');
+        const endIdx = buffer.indexOf(';', argsIdx);
+        
+        if (argsIdx !== -1 && endIdx !== -1) {
+          console.log('✅ [VDI] Received ARGS from Guacd. Configuring connection...');
+          const argsCmd = buffer.substring(argsIdx, endIdx + 1);
+          buffer = buffer.substring(endIdx + 1); // Cắt buffer
+
+          const currentIdx = argsCmd.indexOf(',') + 1;
+          const argNames = argsCmd.substring(currentIdx, argsCmd.length - 1).split(',').map((s) => {
+             const dotIdx = s.indexOf('.');
+             return s.substring(dotIdx + 1);
+          });
+
+          const settings = connectionSettings.connection.settings;
+          const width = String(settings.width || '1024');
+          const height = String(settings.height || '768');
+          const dpi = String(settings.dpi || '96');
+
+          // Phản hồi size/audio/video
+          guacClient.write(`4.size,${width.length}.${width},${height.length}.${height},${dpi.length}.${dpi};`);
+          guacClient.write(`5.audio,9.audio/ogg;`);
+          guacClient.write(`5.image,9.image/png;`); // Force PNG cho ổn định
+
+          // Gửi lệnh Connect (Step 3)
+          let connectOp = '7.connect';
+          argNames.forEach((arg) => {
+            const val = String(settings[arg] || '');
+            connectOp += `,${val.length}.${val}`;
+          });
+          connectOp += ';';
+          guacClient.write(connectOp);
+
+          handshakeState = 'WAITING_READY';
+        }
+      }
+
+      // Step 4: Đợi Ready (5.ready...)
+      if (handshakeState === 'WAITING_READY') {
+        if (buffer.indexOf('5.ready') !== -1) {
+           console.log('🎉 [VDI] Handshake Complete! Tunnel established.');
+           handshakeState = 'READY';
+           ws.send(buffer);
+           buffer = '';
+        }
       }
     });
 
     // 4. Browser -> Guacd
     ws.on('message', (msg) => {
       if (handshakeState === 'READY' && guacClient) {
-        // Dữ liệu từ Browser lên thường là text opcode, gửi thẳng ok
         guacClient.write(msg as Buffer);
       }
     });
 
     ws.on('close', () => {
+        console.log('🔌 [VDI] Client Disconnected.');
         if (guacClient) guacClient.end();
     });
     
@@ -152,17 +186,17 @@ async function bootstrap() {
     }
   });
 
-  // --- BẮT ĐƯỜNG DẪN /guaclite ---
+  // Bắt sự kiện Upgrade thủ công cho đường dẫn /guaclite
   server.on('upgrade', (request, socket, head) => {
-      // Chỉ xử lý nếu URL bắt đầu bằng /guaclite
-      if (request.url.startsWith('/guaclite')) {
-          wss.handleUpgrade(request, socket, head, (ws) => {
-              wss.emit('connection', ws, request);
-          });
-      }
+    const url = request.url || '';
+    if (url.startsWith('/guaclite')) {
+      // Upgrade request for VDI WebSocket
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+      });
+    } else {
+      socket.destroy();
+    }
   });
-
-  await app.listen(3000);
-  console.log(`✅ VDI Portal Backend running on port 3000/api`);
 }
 bootstrap();
