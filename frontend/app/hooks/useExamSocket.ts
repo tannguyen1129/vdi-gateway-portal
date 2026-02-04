@@ -7,19 +7,20 @@ export const useExamSocket = (examId: number, userId: number, fullName: string) 
     useEffect(() => {
         if (!examId || !userId) return;
 
-        // 1. Lấy URL từ biến môi trường
-        let url = process.env.NEXT_PUBLIC_API_URL || 'http://217.216.33.134:3000';
-        
-        // 2. Xóa dấu "/" ở cuối nếu có (để tránh lỗi //socket.io)
-        if (url.endsWith('/')) {
-            url = url.slice(0, -1);
+        // [FIX QUAN TRỌNG]
+        // 1. Nếu đang ở trình duyệt, dùng chính domain hiện tại (Port 80)
+        // 2. Bỏ hardcode Port 3000 đi
+        let url = '';
+        if (typeof window !== 'undefined') {
+             url = window.location.origin; // Ví dụ: http://217.216.33.134
         }
-
-        console.log("🔌 Connecting to Socket URL:", url); // Log để kiểm tra xem nó nhận IP nào
+        
+        console.log("🔌 Connecting to Socket URL:", url);
 
         socketRef.current = io(url, {
             transports: ['websocket'],
             reconnectionAttempts: 5,
+            // Nginx đã cấu hình location /socket.io/ nên không cần path custom
         });
 
         socketRef.current.on('connect', () => {
@@ -32,7 +33,6 @@ export const useExamSocket = (examId: number, userId: number, fullName: string) 
         };
     }, [examId, userId, fullName]);
 
-    // Hàm báo cáo vi phạm
     const reportViolation = (type: string) => {
         if (socketRef.current) {
             console.log("🚨 Reporting violation:", type);

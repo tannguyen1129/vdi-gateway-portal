@@ -191,33 +191,16 @@ export default function GuacamoleDisplay({
 
         // --- XỬ LÝ URL DYNAMIC CHO VPS ---
         const resolveWsBase = () => {
-          // Ưu tiên biến môi trường nếu có
-          let base = (process.env.NEXT_PUBLIC_API_URL || '').trim();
-
-          // [FIX QUAN TRỌNG]: Nếu không có biến môi trường, tự động lấy IP nhưng ÉP CỔNG 3000
-          // Để kết nối thẳng vào Backend, tránh đi qua Next.js Proxy (Port 80) gây lỗi WebSocket
-          if (!base && typeof window !== 'undefined') {
-              const protocol = window.location.protocol; // http: hoặc https:
-              const hostname = window.location.hostname; // 217.216.33.134
-              
-              // Ép cứng port 3000 để bypass Next.js
-              base = `${protocol}//${hostname}:3000`;
-          }
-
-          // Chuẩn hóa URL
-          base = base.replace(/\/+$/, ''); // Bỏ dấu / ở cuối
-          if (base.endsWith('/api')) base = base.slice(0, -4);
-
-          // Chuyển http -> ws, https -> wss
-          if (base.startsWith('http://')) return `ws://${base.slice('http://'.length)}`;
-          if (base.startsWith('https://')) return `wss://${base.slice('https://'.length)}`;
+          if (typeof window === 'undefined') return '';
           
-          // Trường hợp base là relative hoặc IP không protocol
-          const wsProto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-          if (!base.startsWith('ws://') && !base.startsWith('wss://')) {
-             return `${wsProto}://${base}`; // Lúc này base đã có port 3000
-          }
-          return base;
+          // Tự động lấy protocol (ws/wss) dựa trên trang web hiện tại
+          const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+          
+          // Lấy host hiện tại (ví dụ: 217.216.33.134) - Không cần port 3000 nữa
+          const host = window.location.host; 
+          
+          // Kết nối thẳng vào đường dẫn gốc (Nginx sẽ lo phần /guaclite)
+          return `${protocol}://${host}`;
         };
 
         // Lấy kích thước khung hình hiện tại
