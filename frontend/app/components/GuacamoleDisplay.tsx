@@ -4,22 +4,29 @@ import React, { useEffect, useRef, useState } from "react";
 import Guacamole from "guacamole-common-js";
 import { useKioskMode } from "../hooks/useKioskMode";
 
-// WebSocketTunnel mặc định không giữ state parser giữa các message,
-// dẫn tới lỗi "Invalid array length" nếu message bị cắt. Tạo tunnel
-// có parser streaming để xử lý chunk an toàn.
+// --- CUSTOM TUNNEL CLASS ---
+// Khắc phục lỗi "Invalid array length" khi mạng không ổn định
+// bằng cách sử dụng Guacamole.Parser để stream dữ liệu thay vì parse từng message
 class StableWebSocketTunnel extends Guacamole.Tunnel {
   private socket: WebSocket | null = null;
+  // Dùng 'as any' để truy cập Parser vì type definition có thể thiếu
   private parser = new (Guacamole as any).Parser();
 
   constructor(private url: string) {
     super();
+    // Khi Parser giải mã xong một lệnh, nó gọi oninstruction
     this.parser.oninstruction = (opcode: string, args: string[]) => {
       if (this.oninstruction) this.oninstruction(opcode, args);
     };
   }
 
   connect(_data?: string) {
-    // [FIX LỖI TS]: Ép kiểu (this as any) để gọi hàm setState
+    // Reset parser khi bắt đầu kết nối mới
+    this.parser = new (Guacamole as any).Parser();
+    this.parser.oninstruction = (opcode: string, args: string[]) => {
+      if (this.oninstruction) this.oninstruction(opcode, args);
+    };
+
     (this as any).setState(Guacamole.Tunnel.State.CONNECTING);
     
     this.socket = new WebSocket(this.url, "guacamole");
@@ -31,12 +38,13 @@ class StableWebSocketTunnel extends Guacamole.Tunnel {
     this.socket.onmessage = (event) => {
       const handleText = (text: string) => {
         try {
+          // Đẩy dữ liệu vào parser, nó sẽ tự ghép nối các chunk
           this.parser.receive(text);
         } catch (e) {
           if (this.onerror) {
             this.onerror(new (Guacamole as any).Status(
               (Guacamole as any).Status.Code.SERVER_ERROR,
-              "Protocol parse error",
+              "Protocol parse error"
             ));
           }
         }
@@ -54,14 +62,19 @@ class StableWebSocketTunnel extends Guacamole.Tunnel {
 
     this.socket.onclose = (event) => {
       (this as any).setState(Guacamole.Tunnel.State.CLOSED);
-      if (this.onerror && event.code && event.reason) {
+      // Chỉ báo lỗi nếu close code không bình thường (khác 1000)
+      if (this.onerror && event.code !== 1000 && event.reason) {
         this.onerror(new (Guacamole as any).Status(event.code, event.reason));
       }
+    };
+    
+    this.socket.onerror = (event) => {
+       // WebSocket error thường không có detail, xử lý ở onclose
     };
   }
 
   disconnect() {
-    if (this.socket && this.socket.readyState < 2) {
+    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
       this.socket.close();
     }
     (this as any).setState(Guacamole.Tunnel.State.CLOSED);
@@ -69,12 +82,15 @@ class StableWebSocketTunnel extends Guacamole.Tunnel {
 
   sendMessage(opcode: string, ...args: any[]) {
     if (!this.isConnected() || !this.socket) return;
+    
+    // Format lệnh theo giao thức Guacamole: length.content,length.content;
     let message = `${String(opcode).length}.${opcode}`;
     for (const arg of args) {
       const value = String(arg);
       message += `,${value.length}.${value}`;
     }
     message += ";";
+    
     this.socket.send(message);
   }
 }
@@ -102,8 +118,8 @@ export default function GuacamoleDisplay({
 }: GuacamoleDisplayProps) {
   const displayRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const clientRef = useRef<any>(null);
-  const displayRefSize = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
+  const clientRef = useRef<any>(null); // Guacamole.Client
+  const tunnelRef = useRef<any>(null); // Guacamole.Tunnel
 
   // --- 1. LOGIC ĐẾM NGƯỢC ---
   const [timeLeftStr, setTimeLeftStr] = useState("--:--:--");
@@ -135,12 +151,11 @@ export default function GuacamoleDisplay({
   }, [endTime, onTimeUp]);
 
   // --- 2. LOGIC KIOSK & STATUS ---
-  // Hook trả về trạng thái khóa/màn hình
   const { setupKioskInput, enterExamMode, isLocked, isFullScreen, isTabActive } = useKioskMode(!isTimeUp);
   const [status, setStatus] = useState("INITIALIZING");
   const isConnected = status === "CONNECTED";
 
-  // Logic phát hiện vi phạm và gửi báo cáo
+  // Phát hiện vi phạm
   useEffect(() => {
       if (suppressViolation) return;
       if (isConnected && !isTimeUp) {
@@ -164,7 +179,7 @@ export default function GuacamoleDisplay({
   useEffect(() => {
     if (!token) return;
     
-    // Cleanup variables
+    // Cleanup variables local scope để đảm bảo cleanup đúng instance
     let client: any = null;
     let tunnel: any = null;
     let cleanupInput: any = null;
@@ -173,24 +188,37 @@ export default function GuacamoleDisplay({
     const connectVDI = () => {
       try {
         setStatus("CONNECTING");
-        const resolveWsBase = () => {
-          const rawApi = (process.env.NEXT_PUBLIC_API_URL || '').trim();
-          let base = rawApi || window.location.origin;
 
-          base = base.replace(/\/+$/, '');
+        // --- XỬ LÝ URL DYNAMIC CHO VPS ---
+        const resolveWsBase = () => {
+          // Ưu tiên biến môi trường nếu có
+          const rawApi = (process.env.NEXT_PUBLIC_API_URL || '').trim();
+          let base = rawApi;
+
+          // Nếu không có env, dùng window.location (Cực quan trọng cho VPS)
+          if (!base && typeof window !== 'undefined') {
+              base = window.location.origin;
+          }
+
+          // Chuẩn hóa URL
+          base = base.replace(/\/+$/, ''); // Bỏ dấu / ở cuối
           if (base.endsWith('/api')) base = base.slice(0, -4);
 
+          // Chuyển http -> ws, https -> wss
           if (base.startsWith('http://')) return `ws://${base.slice('http://'.length)}`;
           if (base.startsWith('https://')) return `wss://${base.slice('https://'.length)}`;
-
+          
+          // Trường hợp base là relative hoặc IP không protocol
           const wsProto = window.location.protocol === 'https:' ? 'wss' : 'ws';
           if (!base.startsWith('ws://') && !base.startsWith('wss://')) {
-            return `${wsProto}://${base}`;
+            // Nếu base rỗng (relative path), trả về origin
+             if (!base) return `${wsProto}://${window.location.host}`;
+             return `${wsProto}://${base}`;
           }
           return base;
         };
 
-        // Lấy kích thước ban đầu
+        // Lấy kích thước khung hình hiện tại
         const w = containerRef.current?.clientWidth || window.innerWidth;
         const h = containerRef.current?.clientHeight || window.innerHeight;
 
@@ -201,14 +229,19 @@ export default function GuacamoleDisplay({
           dpi: '96',
         });
 
+        // URL cuối cùng: ws://[IP]/guaclite?token=...
         const wsUrl = `${resolveWsBase()}/guaclite?${query.toString()}`;
+        console.log("🔌 Connecting to VDI via:", wsUrl);
 
+        // Khởi tạo Tunnel & Client
         tunnel = new StableWebSocketTunnel(wsUrl);
-
         client = new Guacamole.Client(tunnel);
+        
+        // Lưu vào ref để dùng ở nơi khác (handleResume)
         clientRef.current = client;
+        tunnelRef.current = tunnel;
 
-        // [FIX] Hàm xử lý resize chuẩn
+        // --- XỬ LÝ RESIZE (SCALE) ---
         const handleResize = () => {
            if (!containerRef.current || !client) return;
            
@@ -221,51 +254,54 @@ export default function GuacamoleDisplay({
            const containerW = containerRef.current.clientWidth;
            const containerH = containerRef.current.clientHeight;
 
-           // Tính tỷ lệ scale để hình ảnh luôn nằm trọn trong khung (Letterbox)
+           // Scale kiểu "fit" (giữ nguyên tỉ lệ khung hình)
            const scale = Math.min(containerW / displayW, containerH / displayH);
-           
            display.scale(scale);
         };
 
-        // Dùng ResizeObserver thay vì window.resize để bắt được thay đổi của thẻ div cha
+        // Dùng ResizeObserver để tự động scale khi div cha thay đổi kích thước
         resizeObserver = new ResizeObserver(() => {
             window.requestAnimationFrame(handleResize);
         });
-        
         if (containerRef.current) {
             resizeObserver.observe(containerRef.current);
         }
 
-        // ... (Phần client.onstatechange giữ nguyên) ...
+        // --- EVENTS ---
         client.onstatechange = (state: number) => {
           const map = ["IDLE", "CONNECTING", "WAITING", "CONNECTED", "DISCONNECTING", "DISCONNECTED"];
-          setStatus(map[state] || `STATE_${state}`);
-          if (state === 3) { // Connected
-             // Đợi một chút để render xong rồi mới scale
+          const stateStr = map[state] || `STATE_${state}`;
+          console.log(`🔌 VDI State: ${stateStr}`);
+          
+          setStatus(stateStr);
+          
+          if (state === 3) { // 3 = CONNECTED
+             // Đợi DOM cập nhật rồi scale lại cho đẹp
              setTimeout(handleResize, 100);
           }
         };
 
-        client.onerror = (e: any) => { console.error("Guac Error:", e); setStatus("CONNECTION ERROR"); };
+        client.onerror = (e: any) => { 
+            console.error("Guac Error:", e); 
+            setStatus("CONNECTION ERROR"); 
+        };
 
+        // Gắn Element của Guacamole vào DOM
         const displayEl = client.getDisplay().getElement();
-        (displayEl as any).tabIndex = 0; 
+        
+        // Setup Kiosk Input (chuột/phím)
+        cleanupInput = setupKioskInput(client, displayEl);
         
         if (displayRef.current) {
           displayRef.current.innerHTML = "";
           displayRef.current.appendChild(displayEl);
         }
 
-        cleanupInput = setupKioskInput(client, displayEl);
+        // Bắt đầu kết nối
         client.connect('');
 
-        // Keyboard handler (Giữ nguyên)
-        const kbd = new Guacamole.Keyboard(displayEl) as any;
-        kbd.onkeydown = (k: any) => clientRef.current?.sendKeyEvent(1, k);
-        kbd.onkeyup = (k: any) => clientRef.current?.sendKeyEvent(0, k);
-
       } catch (err) {
-        console.error(err);
+        console.error("Init Error:", err);
         setStatus("CLIENT_EXCEPTION");
       }
     };
@@ -273,15 +309,18 @@ export default function GuacamoleDisplay({
     connectVDI();
 
     return () => {
+      console.log("🧹 Cleaning up VDI connection...");
       if (cleanupInput) cleanupInput();
       if (resizeObserver) resizeObserver.disconnect();
+      
       if (client) {
+         // Ngắt kết nối sạch sẽ
          try { client.disconnect(); } catch {}
       }
     };
-  }, [token, setupKioskInput]);
+  }, [token, setupKioskInput]); // Chỉ chạy lại khi token thay đổi
 
-  // --- 4. TRẠNG THÁI HIỂN THỊ ---
+  // --- 4. RENDER UI ---
   const isViolation = isConnected && !isTimeUp && (!isFullScreen || !isTabActive);
   const isUnlockedWarning = isConnected && !isTimeUp && isFullScreen && !isLocked;
 
@@ -313,7 +352,7 @@ export default function GuacamoleDisplay({
         </div>
       )}
 
-      {/* === [2] SAFETY BAR === */}
+      {/* === [2] SAFETY BAR (Click để focus lại) === */}
       <div 
          className="h-1.5 bg-blue-600 w-full z-50 flex-none cursor-pointer hover:bg-blue-500 transition-colors shadow-md shadow-blue-900/50"
          onClick={handleResume}
@@ -371,12 +410,13 @@ export default function GuacamoleDisplay({
              </div>
           )}
 
-          {/* Loading */}
+          {/* Loading / Waiting Screen */}
           {!isConnected && (
             <div className="absolute inset-0 flex items-center justify-center bg-gray-900 text-white z-50">
                <div className="flex flex-col items-center">
                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mb-4"></div>
-                 <p className="font-mono text-sm tracking-widest">{status}</p>
+                 <p className="font-mono text-sm tracking-widest uppercase">{status}</p>
+                 <p className="text-xs text-gray-500 mt-2">Đang kết nối tới máy chủ...</p>
                </div>
             </div>
           )}
@@ -390,6 +430,7 @@ export default function GuacamoleDisplay({
              </div>
           )}
 
+          {/* Nơi chứa Canvas của Guacamole */}
           <div ref={displayRef} className="absolute inset-0 z-10 w-full h-full" />
       </div>
     </div>

@@ -8,7 +8,7 @@ export const useExamSocket = (examId: number, userId: number, fullName: string) 
         if (!examId || !userId) return;
 
         // 1. Lấy URL từ biến môi trường
-        let url = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+        let url = process.env.NEXT_PUBLIC_API_URL || 'http://217.216.33.134:3000';
         
         // 2. Xóa dấu "/" ở cuối nếu có (để tránh lỗi //socket.io)
         if (url.endsWith('/')) {
