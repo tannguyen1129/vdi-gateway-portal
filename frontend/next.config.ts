@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
     return [
       {
         source: '/api/:path*',
-        destination: 'http://umt_backend:4000/:path*',
+        destination: 'http://umt_backend:3000/:path*',
       },
     ];
   },

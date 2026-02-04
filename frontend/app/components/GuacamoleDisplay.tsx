@@ -173,22 +173,21 @@ export default function GuacamoleDisplay({
     const connectVDI = () => {
       try {
         setStatus("CONNECTING");
-        const wsProto = window.location.protocol === 'https:' ? 'wss' : 'ws';
         const resolveWsBase = () => {
-          const raw = (process.env.NEXT_PUBLIC_VDI_URL || '').trim();
-          if (raw) {
-            let base = raw.replace(/\/+$/, '');
-            if (base.startsWith('http://')) base = `ws://${base.slice('http://'.length)}`;
-            else if (base.startsWith('https://')) base = `wss://${base.slice('https://'.length)}`;
-            else if (!base.startsWith('ws://') && !base.startsWith('wss://')) {
-              base = `${wsProto}://${base}`;
-            }
-            return base;
-          }
+          const rawApi = (process.env.NEXT_PUBLIC_API_URL || '').trim();
+          let base = rawApi || window.location.origin;
 
-          const host = process.env.NEXT_PUBLIC_VDI_HOST || window.location.hostname;
-          const port = process.env.NEXT_PUBLIC_VDI_PORT || '4000';
-          return `${wsProto}://${host}:${port}`;
+          base = base.replace(/\/+$/, '');
+          if (base.endsWith('/api')) base = base.slice(0, -4);
+
+          if (base.startsWith('http://')) return `ws://${base.slice('http://'.length)}`;
+          if (base.startsWith('https://')) return `wss://${base.slice('https://'.length)}`;
+
+          const wsProto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+          if (!base.startsWith('ws://') && !base.startsWith('wss://')) {
+            return `${wsProto}://${base}`;
+          }
+          return base;
         };
 
         // Lấy kích thước ban đầu

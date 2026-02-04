@@ -5,8 +5,6 @@ services:
     image: guacamole/guacd:1.5.5
     container_name: umt_guacd
     restart: always
-    env_file:
-      - .env
     expose:
       - "4822"
     networks:
@@ -24,8 +22,6 @@ services:
     image: postgres:15-alpine
     container_name: umt_db
     restart: always
-    env_file:
-      - .env
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
@@ -46,7 +42,6 @@ services:
       - .env
     ports:
       - "3000:3000"
-      - "4000:4000"
     depends_on:
       - postgres
       - guacd
@@ -61,8 +56,6 @@ services:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
     container_name: umt_frontend
     restart: always
-    env_file:
-      - .env
     environment:
       - PORT=3000
     ports:
