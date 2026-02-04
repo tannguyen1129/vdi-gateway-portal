@@ -192,12 +192,16 @@ export default function GuacamoleDisplay({
         // --- XỬ LÝ URL DYNAMIC CHO VPS ---
         const resolveWsBase = () => {
           // Ưu tiên biến môi trường nếu có
-          const rawApi = (process.env.NEXT_PUBLIC_API_URL || '').trim();
-          let base = rawApi;
+          let base = (process.env.NEXT_PUBLIC_API_URL || '').trim();
 
-          // Nếu không có env, dùng window.location (Cực quan trọng cho VPS)
+          // [FIX QUAN TRỌNG]: Nếu không có biến môi trường, tự động lấy IP nhưng ÉP CỔNG 3000
+          // Để kết nối thẳng vào Backend, tránh đi qua Next.js Proxy (Port 80) gây lỗi WebSocket
           if (!base && typeof window !== 'undefined') {
-              base = window.location.origin;
+              const protocol = window.location.protocol; // http: hoặc https:
+              const hostname = window.location.hostname; // 217.216.33.134
+              
+              // Ép cứng port 3000 để bypass Next.js
+              base = `${protocol}//${hostname}:3000`;
           }
 
           // Chuẩn hóa URL
@@ -211,9 +215,7 @@ export default function GuacamoleDisplay({
           // Trường hợp base là relative hoặc IP không protocol
           const wsProto = window.location.protocol === 'https:' ? 'wss' : 'ws';
           if (!base.startsWith('ws://') && !base.startsWith('wss://')) {
-            // Nếu base rỗng (relative path), trả về origin
-             if (!base) return `${wsProto}://${window.location.host}`;
-             return `${wsProto}://${base}`;
+             return `${wsProto}://${base}`; // Lúc này base đã có port 3000
           }
           return base;
         };
